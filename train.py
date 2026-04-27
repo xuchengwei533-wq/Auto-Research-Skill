@@ -79,7 +79,7 @@ MIN_SUPPORTED_VRAM_GB_BY_ARCH = {
 VRAM_FLOOR_TOLERANCE_GB = 0.05
 AUTOTUNE_WARMUP_STEPS = 2
 AUTOTUNE_MEASURE_STEPS = 3
-AUTOTUNE_MAX_MEMORY_FRACTION = 0.90
+AUTOTUNE_MAX_MEMORY_FRACTION = 0.85
 AUTOTUNE_CACHE_VERSION = "gpu-profile-v2"
 
 
@@ -123,6 +123,18 @@ def _get_gpu_peak_flops(gpu_name):
 
 def _resolve_gpu_profile(gpu_name, capability, gpu_vram_gb, is_windows):
     name = gpu_name.lower()
+    # Conservative profile for RTX 5070 Ti desktops: favor stability over max throughput.
+    if "5070 ti" in name and "laptop" not in name:
+        return GpuProfile(
+            name="5070ti-stable",
+            is_supported_consumer=True,
+            is_compatibility_only=False,
+            train_batch_candidates=(16, 8, 4, 2),
+            checkpoint_modes=(True,),
+            default_checkpointing=True,
+            eval_batch_cap=8,
+        )
+
     arch = SUPPORTED_CONSUMER_CAPABILITIES.get(capability)
     min_vram_gb = MIN_SUPPORTED_VRAM_GB_BY_ARCH.get(arch, float("inf"))
     is_rtx = "rtx" in name
@@ -813,9 +825,9 @@ WARMDOWN_RATIO = 0.5
 FINAL_LR_FRAC = 0.0
 
 # Model size + memory defaults
-DEPTH = 8
-DEVICE_BATCH_SIZE = 16
-EVAL_BATCH_SIZE = 8
+DEPTH = 4
+DEVICE_BATCH_SIZE = 8
+EVAL_BATCH_SIZE = 4
 
 
 def build_model_config(depth, vocab_size, runtime, use_activation_checkpointing=None):
