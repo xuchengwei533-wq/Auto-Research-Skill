@@ -19,3 +19,21 @@ AGENTS.md
 # Experimental code/artifacts
 dev/
 checkpoint_pre_eval.pt
+
+# NightRunner local state
+.nightrunner/worktrees/
+.nightrunner/tmp/
+.nightrunner/cache/
+.nightrunner/runs/*/run.log
+.nightrunner/runs/*/request.json
+.nightrunner/runs/*/response.json
+.nightrunner/config.local.yaml
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# NightRunner local state
+.nightrunner/
