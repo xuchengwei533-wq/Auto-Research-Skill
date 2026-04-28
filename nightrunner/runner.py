@@ -228,7 +228,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     record["used_legacy_patch_mode"] = True
                 else:
                     raise InvalidModelResponse(
-                        "Model response contains neither valid 'edits' nor fallback 'patch'."
+                        "模型输出既没有合法的 'edits'，也没有兼容模式的 'patch'。"
                     )
             except (PatchApplyError, SearchReplaceError, InvalidModelResponse) as exc:
                 record["status"] = "patch_error"
@@ -286,7 +286,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if dry_run:
                 record["status"] = "discard"
-                record["decision"] = "Dry run enabled: patch validated, training skipped."
+                record["decision"] = "已启用 dry-run：补丁校验通过，跳过训练。"
                 _save_status(run_dir, {"status": "discard", "dry_run": True})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
@@ -303,7 +303,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if run_result.get("timeout"):
                 record["status"] = "timeout"
-                record["decision"] = "Training timed out."
+                record["decision"] = "训练超时。"
                 _save_status(run_dir, {"status": "timeout"})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
@@ -311,7 +311,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if run_result.get("returncode") not in (0,):
                 record["status"] = "crash"
-                record["decision"] = "Training process crashed."
+                record["decision"] = "训练进程异常退出。"
                 _save_status(run_dir, {"status": "crash", "run_result": run_result})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
@@ -325,7 +325,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if metrics.get("crashed") or metrics.get("metric_value") is None:
                 record["status"] = "crash"
-                record["decision"] = "Primary metric not found in run log."
+                record["decision"] = "在 run.log 中未找到主指标。"
             else:
                 best = load_best(project_root)
                 best_value = best.get("metric_value") if isinstance(best, dict) else None
@@ -336,7 +336,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                 )
                 if is_keep:
                     record["status"] = "keep"
-                    record["decision"] = "Metric improved over current best."
+                    record["decision"] = "指标优于当前最佳结果。"
                     save_best(
                         project_root,
                         {
@@ -349,7 +349,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     )
                 else:
                     record["status"] = "discard"
-                    record["decision"] = "Metric did not beat current best."
+                    record["decision"] = "指标未超过当前最佳结果。"
 
             _save_status(run_dir, {"status": record["status"], "metrics": record.get("metrics")})
             generate_experiment_report(project_root, exp_id, record)
@@ -381,7 +381,7 @@ def apply_experiment(project_root: Path, exp_id: str) -> Path:
 
     patch_path = project_root / ".nightrunner" / "runs" / exp_id / "patch.diff"
     if not patch_path.exists():
-        raise FileNotFoundError(f"Patch not found: {patch_path}")
+        raise FileNotFoundError(f"找不到 patch 文件: {patch_path}")
     patch_text = patch_path.read_text(encoding="utf-8")
     changed_files, new_files = _files_from_patch(patch_text)
     guard_result = validate_changed_files(
@@ -393,7 +393,7 @@ def apply_experiment(project_root: Path, exp_id: str) -> Path:
         new_files=new_files,
     )
     if not guard_result["ok"]:
-        raise RuntimeError(f"Patch guard failed: {json.dumps(guard_result, ensure_ascii=False)}")
+        raise RuntimeError(f"Patch Guard 校验失败: {json.dumps(guard_result, ensure_ascii=False)}")
 
     # Validate patch can apply cleanly before actual apply.
     run_git(["apply", "--check", str(patch_path)], project_root)
@@ -427,8 +427,8 @@ def check_auth() -> dict[str, Any]:
     return {
         "ok": exists,
         "message": (
-            "DEEPSEEK_API_KEY is set."
+            "DEEPSEEK_API_KEY 已设置。"
             if exists
-            else "DEEPSEEK_API_KEY is not set. Please set it in your environment variables."
+            else "DEEPSEEK_API_KEY 未设置，请先在环境变量中配置。"
         ),
     }
