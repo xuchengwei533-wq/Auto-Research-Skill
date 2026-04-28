@@ -1,38 +1,103 @@
-# NightRunner
+# NightRunner CLI Demo
 
-NightRunner is an AI-powered overnight experiment runner for machine learning projects.
+当前仓库现在包含一个 NightRunner CLI demo。
 
-It is installed as a CLI tool and runs inside your own Git project.
+- NightRunner 会调用 DeepSeek API 生成训练代码 patch。
+- patch 只允许修改 `train.py`。
+- 训练命令默认是 `uv run train.py`。
+- 指标默认是 `val_bpb`，越低越好。
+- 所有实验发生在 `.nightrunner/worktrees/` 中。
+- 主工作区默认不会被修改。
+- 成功实验需要用户手动 apply。
 
-## Install From GitHub
+NightRunner no longer asks the model to write git patches directly.
+The model returns structured search-replace edits.
+NightRunner applies those edits to an isolated worktree and then uses git diff to generate a valid patch.diff.
+This avoids invalid model-generated diff files.
+
+## 使用步骤
+
+1. 安装依赖
 
 ```powershell
-uv tool install "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop#subdirectory=packages/nightrunner"
+uv sync
 ```
 
-## Use In Your Own Project
+2. 准备数据
 
 ```powershell
-cd D:\Research\MyDLProject
-nightrunner init --editable train.py --train-command "uv run train.py" --metric val_loss --lower-is-better
+uv run prepare.py
+```
+
+3. 初始化 NightRunner
+
+```powershell
+uv run nightrunner init
+```
+
+4. 设置 API key
+
+PowerShell 临时设置：
+
+```powershell
 $env:DEEPSEEK_API_KEY="your-key"
-nightrunner baseline
-nightrunner night --rounds 8
-nightrunner report
-notepad nightrunner_summary.md
 ```
 
-## Safety
+长期设置：
 
-- NightRunner does not directly modify your main workspace.
-- AI edits are applied only inside `.nightrunner/worktrees/`.
-- The main workspace changes only if you run `nightrunner apply exp_xxxx`.
-- API key is read from environment variables only.
+```powershell
+setx DEEPSEEK_API_KEY "your-key"
+```
 
-## Example Demo
+5. 检查 key
 
-当前仓库仍保留 Auto-Research-Skill demo（`train.py` / `prepare.py` / `program.md`）用于示例与回归测试。
-推荐的产品使用方式是把 NightRunner 作为独立 CLI 安装后，在你自己的训练项目目录中运行。
+```powershell
+uv run nightrunner auth
+```
+
+6. 先跑基线
+
+```powershell
+uv run nightrunner baseline
+```
+
+这一步会运行原始 `train.py`，并把基线指标写入 `.nightrunner/state/best.json`。
+后续 AI 实验会先和这个基线比较，避免第一条成功实验被默认判定为 `keep`。
+
+7. 开始夜跑
+
+```powershell
+uv run nightrunner night --rounds 3
+```
+
+8. 查看报告
+
+```powershell
+uv run nightrunner report
+```
+
+9. 应用成功实验
+
+```powershell
+uv run nightrunner apply exp_0001
+```
+
+## 注意事项
+
+- 不要把 API key 写进代码。
+- 不要把 `.nightrunner/worktrees` 提交到 Git。
+- 如果还没有基线，请先执行 `uv run nightrunner baseline` 再执行 `night`。
+- 训练失败时看 `run.log`。
+- 模型输出错误时看 `response.json`。
+- patch 越权时看 `violation.json`。
+
+失败状态说明：
+
+- `invalid_response`: 模型输出不是合法 JSON。
+- `patch_error`: search-replace `old_text` 找不到、不唯一，或 legacy patch 无法应用。
+- `violation`: 修改了禁止文件。
+- `crash`: 训练失败或找不到指标。
+- `keep` / `discard`: 成功训练后的结果判断。
 
 # autoresearch
 
