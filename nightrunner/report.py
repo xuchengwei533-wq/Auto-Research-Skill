@@ -19,30 +19,30 @@ def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, 
     used_legacy_patch_mode = bool(data.get("used_legacy_patch_mode", False))
 
     lines = [
-        f"# NightRunner 实验报告 {exp_id}",
+        f"# NightRunner Experiment {exp_id}",
         "",
-        "## 状态",
+        "## Status",
         str(data.get("status", "unknown")),
         "",
-        "## 假设",
+        "## Hypothesis",
         str(data.get("hypothesis", "")),
         "",
-        "## 原因",
+        "## Reason",
         str(data.get("reason", "")),
         "",
-        "## 预期效果",
+        "## Expected Effect",
         str(data.get("expected_effect", "")),
         "",
-        "## 风险",
+        "## Risk",
         str(data.get("risk", "")),
         "",
-        "## 变更文件",
-        ", ".join(files_changed) if files_changed else "(无)",
+        "## Files Changed",
+        ", ".join(files_changed) if files_changed else "(none)",
         "",
-        "## 超参数 / 代码变更摘要",
+        "## Hyperparameter / Code Change Summary",
         str(diff_summary),
         "",
-        "## 应用的 Edits",
+        "## Applied Edits",
     ]
     if applied_edits:
         for edit in applied_edits:
@@ -50,26 +50,26 @@ def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, 
             lines.append(f"- old_text_preview: {edit.get('old_text_preview')}")
             lines.append(f"- new_text_preview: {edit.get('new_text_preview')}")
     elif used_legacy_patch_mode:
-        lines.append("本次实验使用了 legacy patch 兼容模式。")
+        lines.append("This experiment used legacy patch mode.")
     else:
-        lines.append("(无)")
+        lines.append("(none)")
 
     lines += [
         "",
-        "## 指标",
+        "## Metrics",
         f"- metric_name: {metrics.get('metric_name')}",
         f"- metric_value: {metrics.get('metric_value')}",
         f"- peak_vram_mb: {metrics.get('peak_vram_mb')}",
         f"- training_seconds: {metrics.get('training_seconds')}",
         f"- num_steps: {metrics.get('num_steps')}",
         "",
-        "## 决策",
+        "## Decision",
         str(data.get("decision", "")),
         "",
         "## Patch",
         str(data.get("patch_path", run_dir / "patch.diff")),
         "",
-        "## 运行日志",
+        "## Run Log",
         str(data.get("run_log_path", run_dir / "run.log")),
         "",
     ]
@@ -83,6 +83,7 @@ def generate_summary_report(project_root: Path) -> Path:
     baseline_rec = next((r for r in reversed(experiments) if r.get("id") == "baseline"), None)
 
     counts = {
+        "baseline": 0,
         "keep": 0,
         "discard": 0,
         "crash": 0,
@@ -133,7 +134,7 @@ def generate_summary_report(project_root: Path) -> Path:
         f"- Patch: {(best or {}).get('patch_path')}",
         "",
         "## Experiment Table",
-        "| ID | Status | Metric | Δ vs Baseline | Hypothesis | Report |",
+        "| ID | Status | Metric | Delta vs Baseline | Hypothesis | Report |",
         "|---|---|---:|---:|---|---|",
     ]
     baseline_value: float | None = None
@@ -158,7 +159,7 @@ def generate_summary_report(project_root: Path) -> Path:
     if isinstance(best_exp, str) and best_exp and best_exp != "baseline":
         lines.append(f"`nightrunner apply {best_exp}`")
     else:
-        lines.append("先运行 `nightrunner night --rounds 1` 生成可应用实验。")
+        lines.append("Run `nightrunner night --rounds 1` to generate an apply-ready experiment.")
     summary_path = project_root / ".nightrunner" / "summary.md"
     summary_root_path = project_root / "nightrunner_summary.md"
     content = "\n".join(lines)

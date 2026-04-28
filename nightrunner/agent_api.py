@@ -13,12 +13,12 @@ def request_patch(
     reasoning_effort: str = "high",
     thinking_enabled: bool = True,
 ) -> str:
-    """向 DeepSeek API 请求一次实验提案。"""
+    """Request one experiment proposal from DeepSeek API."""
     from openai import OpenAI
 
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
-        raise RuntimeError("未检测到 DEEPSEEK_API_KEY，请先在环境变量中设置。")
+        raise RuntimeError("DEEPSEEK_API_KEY is not set. Please configure it in environment variables.")
 
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     extra_body = {"thinking": {"type": "enabled"}} if thinking_enabled else None
@@ -41,4 +41,4 @@ def request_patch(
             return (response.choices[0].message.content or "").strip()
         except Exception as exc:  # pragma: no cover
             last_exc = exc
-    raise RuntimeError(f"DeepSeek API 请求失败（已重试 3 次）: {last_exc}") from last_exc
+    raise RuntimeError(f"DeepSeek API request failed after retries: {last_exc}") from last_exc

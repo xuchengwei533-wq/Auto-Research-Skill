@@ -101,11 +101,11 @@ def load_config(project_root: Path) -> dict[str, Any]:
     path = get_config_path(project_root)
     if not path.exists():
         raise FileNotFoundError(
-            f"在 {project_root} 中未找到 {CONFIG_FILE_NAME}。请先执行 `nightrunner init`。"
+            f"{CONFIG_FILE_NAME} not found in {project_root}. Run `nightrunner init` first."
         )
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{path} 的配置格式无效，根节点必须是映射对象。")
+        raise ValueError(f"Invalid config format in {path}. Root must be a mapping.")
     return raw
 
 

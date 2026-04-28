@@ -33,7 +33,7 @@ def run_training(command: str, cwd: Path, log_path: Path, timeout_seconds: int) 
         }
     except subprocess.TimeoutExpired as exc:
         with log_path.open("a", encoding="utf-8") as f:
-            f.write(f"\n[NightRunner] 训练超时，超过 {timeout_seconds}s。\n")
+            f.write(f"\n[NightRunner] Training timed out after {timeout_seconds}s.\n")
             if exc.stdout:
                 f.write(str(exc.stdout))
             if exc.stderr:
@@ -46,7 +46,7 @@ def run_training(command: str, cwd: Path, log_path: Path, timeout_seconds: int) 
         }
     except Exception as exc:  # pragma: no cover
         with log_path.open("a", encoding="utf-8") as f:
-            f.write(f"\n[NightRunner] 训练执行器错误: {exc}\n")
+            f.write(f"\n[NightRunner] Training runner error: {exc}\n")
         return {
             "returncode": None,
             "timeout": False,

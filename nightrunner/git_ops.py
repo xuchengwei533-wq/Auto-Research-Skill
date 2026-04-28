@@ -31,7 +31,7 @@ def run_git(args: list[str], cwd: Path) -> str:
     )
     if result.returncode != 0:
         raise GitError(
-            f"Git 命令执行失败: {' '.join(cmd)}\n"
+            f"Git command failed: {' '.join(cmd)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
@@ -48,7 +48,7 @@ def is_git_repo(path: Path) -> bool:
 
 def ensure_git_repo(path: Path) -> None:
     if not is_git_repo(path):
-        raise RuntimeError(f"{path} 不是 Git 仓库。")
+        raise RuntimeError(f"{path} is not a Git repository.")
 
 
 def is_worktree_clean(path: Path) -> bool:
@@ -59,7 +59,7 @@ def is_worktree_clean(path: Path) -> bool:
 def ensure_clean_worktree(path: Path) -> None:
     if not is_worktree_clean(path):
         raise RuntimeError(
-            "当前工作区不干净。请先提交/暂存改动，或将 safety.require_clean_git 设为 false。"
+            "Working tree is not clean. Commit/stash your changes or set safety.require_clean_git=false."
         )
 
 
@@ -85,7 +85,7 @@ def create_worktree(project_root: Path, exp_id: str) -> Path:
             )
             return worktree_path
         except GitError:
-            raise WorktreeSetupError(f"创建实验 worktree 失败: {exc}") from exc
+            raise WorktreeSetupError(f"Failed to create worktree for {exp_id}: {exc}") from exc
 
 
 def remove_worktree(project_root: Path, worktree_path: Path) -> None:
@@ -106,5 +106,5 @@ def save_diff(worktree_path: Path, output_path: Path) -> None:
 
 def apply_patch_to_project(project_root: Path, patch_path: Path) -> None:
     if not patch_path.exists():
-        raise FileNotFoundError(f"找不到 patch 文件: {patch_path}")
+        raise FileNotFoundError(f"Patch file not found: {patch_path}")
     run_git(["apply", str(patch_path)], project_root)

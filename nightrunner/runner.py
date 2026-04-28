@@ -121,7 +121,8 @@ def init_project(
     """Initialize NightRunner runtime files in a git project."""
     if not is_git_repo(project_root):
         raise RuntimeError(
-            "目标目录不是 Git 仓库。请先执行：\n"
+            "NightRunner requires a Git repository for safe worktree isolation.\n"
+            "Please run:\n"
             "git init\n"
             "git add .\n"
             "git commit -m \"Initial commit\""
@@ -164,14 +165,13 @@ def _require_best_baseline(project_root: Path) -> dict[str, Any]:
     best = load_best(project_root)
     if not isinstance(best, dict) or best.get("metric_value") is None:
         raise RuntimeError(
-            "未检测到可用基线。请先执行 `uv run nightrunner baseline`，"
-            "把原始 train.py 的指标写入 best.json。"
+            "No baseline metric found. Run `nightrunner baseline` first."
         )
     return best
 
 
 def run_baseline(project_root: Path, force: bool = False) -> Path:
-    """Run original train.py once and save the result into best.json as baseline."""
+    """Run baseline training once in project root and save best.json."""
     ensure_git_repo(project_root)
     _ensure_layout(project_root)
     config = load_config(project_root)
@@ -181,8 +181,7 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
     existing_best = load_best(project_root)
     if existing_best and not force:
         raise RuntimeError(
-            "best.json 已存在记录。若要用原始 train.py 重新生成基线，请执行 "
-            "`uv run nightrunner baseline --force`。"
+            "best.json already exists. Use `nightrunner baseline --force` to rerun baseline."
         )
 
     run_dir = ensure_dir(project_root / ".nightrunner" / "runs" / "baseline")
@@ -191,22 +190,20 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         "status": "unknown",
         "metric_name": config.get("metric", {}).get("name", "metric"),
         "metric_value": None,
-        "hypothesis": "运行原始 train.py，建立对照基线。",
-        "reason": "先记录未经 AI 修改的原始指标，后续实验才能与真实基线比较。",
-        "expected_effect": "把原始训练结果写入 best.json，避免第一条成功实验被默认判定为 keep。",
-        "risk": "基线训练也可能超时、崩溃，或无法解析主指标。",
+        "hypothesis": "Run baseline training without AI edits.",
+        "reason": "Capture a stable reference metric before automated experiments.",
+        "expected_effect": "best.json stores baseline metric for future keep/discard decisions.",
+        "risk": "Baseline run may fail, timeout, or miss metric extraction.",
         "run_dir": ".nightrunner/runs/baseline",
-        "patch_path": "(baseline 无 patch.diff)",
+        "patch_path": None,
         "created_at": now_iso(),
         "is_baseline": True,
     }
-    worktree_path: Path | None = None
     try:
-        worktree_path = create_worktree(project_root, "baseline")
         log_path = run_dir / "run.log"
         run_result = run_training(
-            command=config.get("execution", {}).get("train_command", "uv run train.py"),
-            cwd=worktree_path,
+            command=config.get("execution", {}).get("train_command", "python train.py"),
+            cwd=project_root,
             log_path=log_path,
             timeout_seconds=int(config.get("execution", {}).get("timeout_seconds", 3600)),
         )
@@ -214,34 +211,37 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
 
         if run_result.get("timeout"):
             record["status"] = "baseline_error"
-            record["decision"] = "基线训练超时。"
+            record["decision"] = "Baseline training timed out."
             _save_status(run_dir, {"status": "baseline_error", "is_baseline": True})
             generate_experiment_report(project_root, "baseline", record)
             append_experiment(project_root, record)
+            generate_summary_report(project_root)
             return run_dir / "report.md"
 
         if run_result.get("returncode") not in (0,):
             record["status"] = "baseline_error"
-            record["decision"] = "基线训练进程异常退出。"
+            record["decision"] = "Baseline training process crashed."
             _save_status(
                 run_dir, {"status": "baseline_error", "run_result": run_result, "is_baseline": True}
             )
             generate_experiment_report(project_root, "baseline", record)
             append_experiment(project_root, record)
+            generate_summary_report(project_root)
             return run_dir / "report.md"
 
         metric_cfg = config.get("metric", {})
-        metrics = parse_metrics(log_path, metric_cfg.get("name", "val_bpb"))
+        metrics = parse_metrics(log_path, metric_cfg.get("name", "val_loss"))
         write_json(run_dir / "metrics.json", metrics)
         record["metrics"] = metrics
         record["metric_value"] = metrics.get("metric_value")
 
         if metrics.get("crashed") or metrics.get("metric_value") is None:
             record["status"] = "baseline_error"
-            record["decision"] = "基线运行完成，但未在 run.log 中找到主指标。"
+            record["decision"] = "Baseline run completed but metric was not found in run.log."
             _save_status(run_dir, {"status": "baseline_error", "metrics": metrics, "is_baseline": True})
             generate_experiment_report(project_root, "baseline", record)
             append_experiment(project_root, record)
+            generate_summary_report(project_root)
             return run_dir / "report.md"
 
         save_best(
@@ -257,10 +257,12 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
             },
         )
         record["status"] = "keep"
-        record["decision"] = "基线已建立，best.json 已写入原始 train.py 的指标。"
-        _save_status(run_dir, {"status": "keep", "metrics": metrics, "is_baseline": True})
+        record["status"] = "baseline"
+        record["decision"] = "Baseline metric saved to best.json."
+        _save_status(run_dir, {"status": "baseline", "metrics": metrics, "is_baseline": True})
         generate_experiment_report(project_root, "baseline", record)
         append_experiment(project_root, record)
+        generate_summary_report(project_root)
         return run_dir / "report.md"
     except Exception as exc:  # pragma: no cover
         record["status"] = "baseline_error"
@@ -270,13 +272,8 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         write_text(run_dir / "error.txt", record["traceback"])
         generate_experiment_report(project_root, "baseline", record)
         append_experiment(project_root, record)
+        generate_summary_report(project_root)
         return run_dir / "report.md"
-    finally:
-        if worktree_path and worktree_path.exists():
-            try:
-                remove_worktree(project_root, worktree_path)
-            except GitError:
-                pass
 
 
 def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
@@ -377,7 +374,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     record["used_legacy_patch_mode"] = True
                 else:
                     raise InvalidModelResponse(
-                        "模型输出既没有合法的 'edits'，也没有兼容模式的 'patch'。"
+                        "Model response contains neither valid 'edits' nor fallback 'patch'."
                     )
             except (PatchApplyError, SearchReplaceError, InvalidModelResponse) as exc:
                 record["status"] = "patch_error"
@@ -435,7 +432,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if dry_run:
                 record["status"] = "discard"
-                record["decision"] = "已启用 dry-run：补丁校验通过，跳过训练。"
+                record["decision"] = "Dry run enabled: patch validated, training skipped."
                 _save_status(run_dir, {"status": "discard", "dry_run": True})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
@@ -443,7 +440,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             log_path = run_dir / "run.log"
             run_result = run_training(
-                command=config.get("execution", {}).get("train_command", "uv run train.py"),
+                command=config.get("execution", {}).get("train_command", "python train.py"),
                 cwd=worktree_path,
                 log_path=log_path,
                 timeout_seconds=int(config.get("execution", {}).get("timeout_seconds", 3600)),
@@ -452,7 +449,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if run_result.get("timeout"):
                 record["status"] = "timeout"
-                record["decision"] = "训练超时。"
+                record["decision"] = "Training timed out."
                 _save_status(run_dir, {"status": "timeout"})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
@@ -460,21 +457,21 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
 
             if run_result.get("returncode") not in (0,):
                 record["status"] = "crash"
-                record["decision"] = "训练进程异常退出。"
+                record["decision"] = "Training process crashed."
                 _save_status(run_dir, {"status": "crash", "run_result": run_result})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
                 continue
 
             metric_cfg = config.get("metric", {})
-            metrics = parse_metrics(log_path, metric_cfg.get("name", "val_bpb"))
+            metrics = parse_metrics(log_path, metric_cfg.get("name", "val_loss"))
             write_json(run_dir / "metrics.json", metrics)
             record["metrics"] = metrics
             record["metric_value"] = metrics.get("metric_value")
 
             if metrics.get("crashed") or metrics.get("metric_value") is None:
                 record["status"] = "crash"
-                record["decision"] = "在 run.log 中未找到主指标。"
+                record["decision"] = "Primary metric not found in run.log."
             else:
                 best = _require_best_baseline(project_root)
                 best_value = best.get("metric_value") if isinstance(best, dict) else None
@@ -485,7 +482,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                 )
                 if is_keep:
                     record["status"] = "keep"
-                    record["decision"] = "指标优于当前最佳结果。"
+                    record["decision"] = "Metric improved over current best."
                     save_best(
                         project_root,
                         {
@@ -498,7 +495,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     )
                 else:
                     record["status"] = "discard"
-                    record["decision"] = "指标未超过当前最佳结果。"
+                    record["decision"] = "Metric did not beat current best."
 
             _save_status(run_dir, {"status": record["status"], "metrics": record.get("metrics")})
             generate_experiment_report(project_root, exp_id, record)
@@ -530,7 +527,7 @@ def apply_experiment(project_root: Path, exp_id: str) -> Path:
 
     patch_path = project_root / ".nightrunner" / "runs" / exp_id / "patch.diff"
     if not patch_path.exists():
-        raise FileNotFoundError(f"找不到 patch 文件: {patch_path}")
+        raise FileNotFoundError(f"Patch file not found: {patch_path}")
     patch_text = patch_path.read_text(encoding="utf-8")
     changed_files, new_files = _files_from_patch(patch_text)
     guard_result = validate_changed_files(
@@ -542,7 +539,7 @@ def apply_experiment(project_root: Path, exp_id: str) -> Path:
         new_files=new_files,
     )
     if not guard_result["ok"]:
-        raise RuntimeError(f"Patch Guard 校验失败: {json.dumps(guard_result, ensure_ascii=False)}")
+        raise RuntimeError(f"Patch guard failed: {json.dumps(guard_result, ensure_ascii=False)}")
 
     # Validate patch can apply cleanly before actual apply.
     run_git(["apply", "--check", str(patch_path)], project_root)
@@ -570,14 +567,21 @@ def clean(project_root: Path) -> dict[str, Any]:
     return {"removed": removed, "failed": failed}
 
 
-def check_auth() -> dict[str, Any]:
-    """Check DeepSeek auth environment variable without printing secret value."""
-    exists = bool(os.environ.get("DEEPSEEK_API_KEY"))
+def check_auth(project_root: Path | None = None) -> dict[str, Any]:
+    """Check API key env var without printing secret value."""
+    env_name = "DEEPSEEK_API_KEY"
+    if project_root is not None:
+        try:
+            cfg = load_config(project_root)
+            env_name = str(cfg.get("agent", {}).get("api_key_env", env_name))
+        except Exception:
+            pass
+    exists = bool(os.environ.get(env_name))
     return {
         "ok": exists,
         "message": (
-            "DEEPSEEK_API_KEY 已设置。"
+            f"{env_name} is set."
             if exists
-            else "DEEPSEEK_API_KEY 未设置，请先在环境变量中配置。"
+            else f"{env_name} is not set. Please configure it in your environment variables."
         ),
     }

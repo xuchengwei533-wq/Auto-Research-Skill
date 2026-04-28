@@ -60,33 +60,33 @@ def parse_model_response(raw_text: str) -> dict[str, Any]:
         data = _extract_first_json_object(raw_text)
 
     if data is None:
-        raise InvalidModelResponse("模型输出不是合法 JSON。")
+        raise InvalidModelResponse("Model response is not valid JSON.")
 
     missing = REQUIRED_COMMON_FIELDS - set(data.keys())
     if missing:
-        raise InvalidModelResponse(f"模型输出缺少必填字段: {sorted(missing)}")
+        raise InvalidModelResponse(f"Model response missing required fields: {sorted(missing)}")
 
     if "edits" in data:
         edits = data.get("edits")
         if not isinstance(edits, list) or not edits:
-            raise InvalidModelResponse("模型输出字段 'edits' 必须是非空列表。")
+            raise InvalidModelResponse("Model response field 'edits' must be a non-empty list.")
         for idx, edit in enumerate(edits):
             if not isinstance(edit, dict):
-                raise InvalidModelResponse(f"第 {idx} 个 edit 必须是对象。")
+                raise InvalidModelResponse(f"Edit #{idx} must be an object.")
             for key in ("file", "old_text", "new_text"):
                 if key not in edit:
-                    raise InvalidModelResponse(f"第 {idx} 个 edit 缺少必填字段 '{key}'。")
+                    raise InvalidModelResponse(f"Edit #{idx} missing required field '{key}'.")
                 if not isinstance(edit[key], str):
-                    raise InvalidModelResponse(f"第 {idx} 个 edit 的字段 '{key}' 必须是字符串。")
+                    raise InvalidModelResponse(f"Edit #{idx} field '{key}' must be a string.")
             if not edit["old_text"]:
-                raise InvalidModelResponse(f"第 {idx} 个 edit 的字段 'old_text' 不能为空。")
+                raise InvalidModelResponse(f"Edit #{idx} field 'old_text' must not be empty.")
         return data
 
     patch = data.get("patch")
     if isinstance(patch, str) and patch.strip():
         return data
 
-    raise InvalidModelResponse("模型输出必须包含非空 'edits'，或兼容模式下的 'patch'。")
+    raise InvalidModelResponse("Model response must include non-empty 'edits' or fallback 'patch'.")
 
 
 def apply_search_replace_edits(worktree_path: Path, edits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -99,27 +99,27 @@ def apply_search_replace_edits(worktree_path: Path, edits: list[dict[str, Any]])
 
         edit_path = Path(edit_file)
         if edit_path.is_absolute():
-            raise SearchReplaceError(f"edit 文件必须是相对路径: {edit_file}")
+            raise SearchReplaceError(f"Edit file must be a relative path: {edit_file}")
         if ".." in edit_path.parts:
-            raise SearchReplaceError(f"edit 文件路径不能包含 '..': {edit_file}")
+            raise SearchReplaceError(f"Edit file must not contain '..': {edit_file}")
 
         target_path = (worktree_path / edit_path).resolve()
         try:
             target_path.relative_to(worktree_path.resolve())
         except ValueError as exc:
-            raise SearchReplaceError(f"edit 路径越界，超出 worktree: {edit_file}") from exc
+            raise SearchReplaceError(f"Edit path escapes worktree: {edit_file}") from exc
         if not target_path.exists() or not target_path.is_file():
-            raise SearchReplaceError(f"找不到 edit 目标文件: {edit_file}")
+            raise SearchReplaceError(f"Edit target file not found: {edit_file}")
 
         content = target_path.read_text(encoding="utf-8")
         count = content.count(old_text)
         if count == 0:
             preview = old_text[:200]
             raise SearchReplaceError(
-                f"{edit_file} 中未找到 old_text。old_text 预览: {preview}"
+                f"old_text not found in {edit_file}. old_text preview: {preview}"
             )
         if count > 1:
-            raise SearchReplaceError(f"{edit_file} 中 old_text 不唯一，出现次数={count}")
+            raise SearchReplaceError(f"old_text is not unique in {edit_file}. occurrences={count}")
 
         updated = content.replace(old_text, new_text, 1)
         target_path.write_text(updated, encoding="utf-8")
@@ -139,13 +139,13 @@ def apply_search_replace_edits(worktree_path: Path, edits: list[dict[str, Any]])
 def apply_patch(worktree_path: Path, patch_text: str) -> None:
     """Apply unified diff patch inside worktree using git apply."""
     if not patch_text.strip():
-        raise PatchApplyError("patch 内容为空。")
+        raise PatchApplyError("Patch is empty.")
     with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False, encoding="utf-8") as f:
         f.write(patch_text)
         patch_file = Path(f.name)
     try:
         run_git(["apply", str(patch_file)], worktree_path)
     except GitError as exc:
-        raise PatchApplyError(f"git apply 失败: {exc}") from exc
+        raise PatchApplyError(f"git apply failed: {exc}") from exc
     finally:
         patch_file.unlink(missing_ok=True)
