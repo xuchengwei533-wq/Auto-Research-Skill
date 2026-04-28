@@ -28,7 +28,7 @@ def _extract_assignments(lines: list[str]) -> dict[str, str]:
 
 
 def analyze_diff(diff_text: str) -> dict[str, Any]:
-    """Analyze patch text for changed files, line stats, and likely hyperparameters."""
+    """Analyze git diff text for changed files, line stats, and likely hyperparameters."""
     files_changed: list[str] = []
     added_lines = 0
     removed_lines = 0

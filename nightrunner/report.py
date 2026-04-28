@@ -15,6 +15,8 @@ def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, 
     metrics = data.get("metrics", {})
     files_changed = data.get("files_changed", [])
     diff_summary = data.get("diff_summary", {})
+    applied_edits = data.get("applied_edits", [])
+    used_legacy_patch_mode = bool(data.get("used_legacy_patch_mode", False))
 
     lines = [
         f"# NightRunner Experiment {exp_id}",
@@ -39,6 +41,20 @@ def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, 
         "",
         "## Hyperparameter / Code Change Summary",
         str(diff_summary),
+        "",
+        "## Applied Edits",
+    ]
+    if applied_edits:
+        for edit in applied_edits:
+            lines.append(f"- file: {edit.get('file')}")
+            lines.append(f"- old_text_preview: {edit.get('old_text_preview')}")
+            lines.append(f"- new_text_preview: {edit.get('new_text_preview')}")
+    elif used_legacy_patch_mode:
+        lines.append("This experiment used legacy patch mode.")
+    else:
+        lines.append("(none)")
+
+    lines += [
         "",
         "## Metrics",
         f"- metric_name: {metrics.get('metric_name')}",
@@ -74,7 +90,6 @@ def generate_summary_report(project_root: Path) -> Path:
         "api_error": 0,
         "invalid_response": 0,
         "patch_error": 0,
-        "dry_run": 0,
     }
     for rec in experiments:
         status = rec.get("status")
@@ -93,7 +108,7 @@ def generate_summary_report(project_root: Path) -> Path:
         f"- Violation: {counts['violation']}",
         f"- API Error: {counts['api_error']}",
         f"- Invalid Response: {counts['invalid_response']}",
-        f"- Dry Run: {counts['dry_run']}",
+        f"- Patch Error: {counts['patch_error']}",
         "",
         "## Current Best",
         f"- Experiment: {(best or {}).get('experiment_id')}",

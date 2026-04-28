@@ -49,3 +49,16 @@ def test_editable_directory_allowed() -> None:
         new_files=[],
     )
     assert result["ok"] is True
+
+
+def test_protected_priority_over_editable() -> None:
+    result = validate_changed_files(
+        changed_files=["src/secret.py"],
+        editable_files=["src/"],
+        protected_files=["src/"],
+        allow_new_files=False,
+        allow_dependency_changes=False,
+        new_files=[],
+    )
+    assert result["ok"] is False
+    assert any(v["type"] == "protected_file" for v in result["violations"])

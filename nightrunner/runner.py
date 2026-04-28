@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import traceback
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .agent_api import request_patch
 from .config import NIGHTRUNNER_GITIGNORE_LINES, load_config, write_default_config_if_missing
 from .diff_analyzer import analyze_diff
@@ -22,7 +24,14 @@ from .git_ops import (
 )
 from .log_parser import parse_metrics
 from .patch_guard import get_changed_files, get_new_files, validate_changed_files
-from .patch_handler import InvalidModelResponse, PatchApplyError, apply_patch, parse_model_response
+from .patch_handler import (
+    InvalidModelResponse,
+    PatchApplyError,
+    SearchReplaceError,
+    apply_patch,
+    apply_search_replace_edits,
+    parse_model_response,
+)
 from .prompt_builder import build_system_prompt, build_user_prompt
 from .report import generate_experiment_report, generate_summary_report
 from .state_store import append_experiment, load_best, load_experiments, next_experiment_id, save_best
@@ -117,7 +126,11 @@ def init_project(project_root: Path) -> dict[str, Any]:
     if not project_meta.exists():
         write_json(
             project_meta,
-            {"project_root": str(project_root.resolve()), "initialized_at": now_iso()},
+            {
+                "project_root": str(project_root.resolve()),
+                "created_at": now_iso(),
+                "nightrunner_version": __version__,
+            },
         )
     _update_gitignore(project_root)
     return {
@@ -174,8 +187,6 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     model=config.get("agent", {}).get("model", "deepseek-v4-pro"),
                     reasoning_effort=config.get("agent", {}).get("reasoning_effort", "high"),
                     thinking_enabled=config.get("agent", {}).get("thinking_enabled", True),
-                    base_url=config.get("agent", {}).get("base_url", "https://api.deepseek.com"),
-                    api_key_env=config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"),
                 )
             except Exception as exc:
                 record["status"] = "api_error"
@@ -198,18 +209,44 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                 append_experiment(project_root, record)
                 continue
 
-            write_text(run_dir / "model.patch.diff", parsed["patch"])
             record["hypothesis"] = parsed.get("hypothesis", "")
             record["reason"] = parsed.get("reason", "")
             record["expected_effect"] = parsed.get("expected_effect", "")
             record["risk"] = parsed.get("risk", "")
+            record["used_legacy_patch_mode"] = False
 
             try:
-                apply_patch(worktree_path, parsed["patch"])
-            except PatchApplyError as exc:
+                if "edits" in parsed:
+                    model_edits = parsed["edits"]
+                    write_json(run_dir / "model_edits.json", {"edits": model_edits})
+                    applied_edits = apply_search_replace_edits(worktree_path, model_edits)
+                    write_json(run_dir / "applied_edits.json", {"applied_edits": applied_edits})
+                    record["applied_edits"] = applied_edits
+                elif isinstance(parsed.get("patch"), str) and parsed["patch"].strip():
+                    write_text(run_dir / "model.patch.diff", parsed["patch"])
+                    apply_patch(worktree_path, parsed["patch"])
+                    record["used_legacy_patch_mode"] = True
+                else:
+                    raise InvalidModelResponse(
+                        "Model response contains neither valid 'edits' nor fallback 'patch'."
+                    )
+            except (PatchApplyError, SearchReplaceError, InvalidModelResponse) as exc:
                 record["status"] = "patch_error"
                 record["error"] = str(exc)
-                _save_status(run_dir, {"status": "patch_error", "error": str(exc)})
+                if isinstance(exc, SearchReplaceError):
+                    record["error_type"] = "search_replace_error"
+                elif isinstance(exc, PatchApplyError):
+                    record["error_type"] = "legacy_patch_error"
+                else:
+                    record["error_type"] = "invalid_model_response"
+                _save_status(
+                    run_dir,
+                    {
+                        "status": "patch_error",
+                        "error_type": record.get("error_type"),
+                        "error": str(exc),
+                    },
+                )
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
                 continue
@@ -225,11 +262,13 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                     "allow_dependency_changes", False
                 ),
                 new_files=new_files,
+                run_dir=run_dir,
             )
             if not guard_result["ok"]:
                 record["status"] = "violation"
                 record["violations"] = guard_result["violations"]
-                write_text(run_dir / "illegal.patch.diff", parsed["patch"])
+                if isinstance(parsed.get("patch"), str):
+                    write_text(run_dir / "illegal.patch.diff", parsed["patch"])
                 _save_status(
                     run_dir,
                     {"status": "violation", "violations": guard_result["violations"]},
@@ -246,9 +285,9 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
             record["diff_summary"] = diff_summary
 
             if dry_run:
-                record["status"] = "dry_run"
+                record["status"] = "discard"
                 record["decision"] = "Dry run enabled: patch validated, training skipped."
-                _save_status(run_dir, {"status": "dry_run"})
+                _save_status(run_dir, {"status": "discard", "dry_run": True})
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
                 continue
@@ -380,3 +419,16 @@ def clean(project_root: Path) -> dict[str, Any]:
         except Exception:
             failed.append(child.name)
     return {"removed": removed, "failed": failed}
+
+
+def check_auth() -> dict[str, Any]:
+    """Check DeepSeek auth environment variable without printing secret value."""
+    exists = bool(os.environ.get("DEEPSEEK_API_KEY"))
+    return {
+        "ok": exists,
+        "message": (
+            "DEEPSEEK_API_KEY is set."
+            if exists
+            else "DEEPSEEK_API_KEY is not set. Please set it in your environment variables."
+        ),
+    }

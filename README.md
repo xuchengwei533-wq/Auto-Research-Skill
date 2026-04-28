@@ -1,3 +1,94 @@
+# NightRunner CLI Demo
+
+当前仓库现在包含一个 NightRunner CLI demo。
+
+- NightRunner 会调用 DeepSeek API 生成训练代码 patch。
+- patch 只允许修改 `train.py`。
+- 训练命令默认是 `uv run train.py`。
+- 指标默认是 `val_bpb`，越低越好。
+- 所有实验发生在 `.nightrunner/worktrees/` 中。
+- 主工作区默认不会被修改。
+- 成功实验需要用户手动 apply。
+
+NightRunner no longer asks the model to write git patches directly.
+The model returns structured search-replace edits.
+NightRunner applies those edits to an isolated worktree and then uses git diff to generate a valid patch.diff.
+This avoids invalid model-generated diff files.
+
+## 使用步骤
+
+1. 安装依赖
+
+```powershell
+uv sync
+```
+
+2. 准备数据
+
+```powershell
+uv run prepare.py
+```
+
+3. 初始化 NightRunner
+
+```powershell
+uv run nightrunner init
+```
+
+4. 设置 API key
+
+PowerShell 临时设置：
+
+```powershell
+$env:DEEPSEEK_API_KEY="your-key"
+```
+
+长期设置：
+
+```powershell
+setx DEEPSEEK_API_KEY "your-key"
+```
+
+5. 检查 key
+
+```powershell
+uv run nightrunner auth
+```
+
+6. 开始夜跑
+
+```powershell
+uv run nightrunner night --rounds 3
+```
+
+7. 查看报告
+
+```powershell
+uv run nightrunner report
+```
+
+8. 应用成功实验
+
+```powershell
+uv run nightrunner apply exp_0001
+```
+
+## 注意事项
+
+- 不要把 API key 写进代码。
+- 不要把 `.nightrunner/worktrees` 提交到 Git。
+- 训练失败时看 `run.log`。
+- 模型输出错误时看 `response.json`。
+- patch 越权时看 `violation.json`。
+
+失败状态说明：
+
+- `invalid_response`: 模型输出不是合法 JSON。
+- `patch_error`: search-replace `old_text` 找不到、不唯一，或 legacy patch 无法应用。
+- `violation`: 修改了禁止文件。
+- `crash`: 训练失败或找不到指标。
+- `keep` / `discard`: 成功训练后的结果判断。
+
 # autoresearch
 
 > Convert your gaming PC into an autonomous AI researcher.

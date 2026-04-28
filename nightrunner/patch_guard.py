@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,7 @@ def validate_changed_files(
     allow_new_files: bool,
     allow_dependency_changes: bool,
     new_files: list[str] | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Validate changed files against editable/protected/dependency rules."""
     editable_norm = [_norm(x) for x in editable_files]
@@ -86,4 +88,12 @@ def validate_changed_files(
         for new_file in new_norm:
             violations.append({"type": "new_file", "file": new_file})
 
-    return {"ok": len(violations) == 0, "violations": violations}
+    result = {"ok": len(violations) == 0, "violations": violations}
+    if (not result["ok"]) and run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"violations": violations}
+        (run_dir / "violation.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return result
