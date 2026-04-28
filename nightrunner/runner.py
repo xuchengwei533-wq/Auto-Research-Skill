@@ -24,7 +24,14 @@ from .git_ops import (
 )
 from .log_parser import parse_metrics
 from .patch_guard import get_changed_files, get_new_files, validate_changed_files
-from .patch_handler import InvalidModelResponse, PatchApplyError, apply_patch, parse_model_response
+from .patch_handler import (
+    InvalidModelResponse,
+    PatchApplyError,
+    SearchReplaceError,
+    apply_patch,
+    apply_search_replace_edits,
+    parse_model_response,
+)
 from .prompt_builder import build_system_prompt, build_user_prompt
 from .report import generate_experiment_report, generate_summary_report
 from .state_store import append_experiment, load_best, load_experiments, next_experiment_id, save_best
@@ -202,18 +209,44 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                 append_experiment(project_root, record)
                 continue
 
-            write_text(run_dir / "model.patch.diff", parsed["patch"])
             record["hypothesis"] = parsed.get("hypothesis", "")
             record["reason"] = parsed.get("reason", "")
             record["expected_effect"] = parsed.get("expected_effect", "")
             record["risk"] = parsed.get("risk", "")
+            record["used_legacy_patch_mode"] = False
 
             try:
-                apply_patch(worktree_path, parsed["patch"])
-            except PatchApplyError as exc:
+                if "edits" in parsed:
+                    model_edits = parsed["edits"]
+                    write_json(run_dir / "model_edits.json", {"edits": model_edits})
+                    applied_edits = apply_search_replace_edits(worktree_path, model_edits)
+                    write_json(run_dir / "applied_edits.json", {"applied_edits": applied_edits})
+                    record["applied_edits"] = applied_edits
+                elif isinstance(parsed.get("patch"), str) and parsed["patch"].strip():
+                    write_text(run_dir / "model.patch.diff", parsed["patch"])
+                    apply_patch(worktree_path, parsed["patch"])
+                    record["used_legacy_patch_mode"] = True
+                else:
+                    raise InvalidModelResponse(
+                        "Model response contains neither valid 'edits' nor fallback 'patch'."
+                    )
+            except (PatchApplyError, SearchReplaceError, InvalidModelResponse) as exc:
                 record["status"] = "patch_error"
                 record["error"] = str(exc)
-                _save_status(run_dir, {"status": "patch_error", "error": str(exc)})
+                if isinstance(exc, SearchReplaceError):
+                    record["error_type"] = "search_replace_error"
+                elif isinstance(exc, PatchApplyError):
+                    record["error_type"] = "legacy_patch_error"
+                else:
+                    record["error_type"] = "invalid_model_response"
+                _save_status(
+                    run_dir,
+                    {
+                        "status": "patch_error",
+                        "error_type": record.get("error_type"),
+                        "error": str(exc),
+                    },
+                )
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
                 continue
@@ -234,7 +267,8 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
             if not guard_result["ok"]:
                 record["status"] = "violation"
                 record["violations"] = guard_result["violations"]
-                write_text(run_dir / "illegal.patch.diff", parsed["patch"])
+                if isinstance(parsed.get("patch"), str):
+                    write_text(run_dir / "illegal.patch.diff", parsed["patch"])
                 _save_status(
                     run_dir,
                     {"status": "violation", "violations": guard_result["violations"]},

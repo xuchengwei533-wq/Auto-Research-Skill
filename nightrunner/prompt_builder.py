@@ -7,24 +7,31 @@ from typing import Any
 
 
 def build_system_prompt() -> str:
-    """Return strict system prompt for one experiment patch generation."""
+    """Return strict system prompt for one experiment generation."""
     return (
         "You are NightRunner's AI coding researcher.\n"
-        "Current project is a fixed benchmark training project.\n"
-        "Your task is to propose exactly one experiment.\n"
-        "You may only modify editable files.\n"
-        "Default editable file is train.py.\n"
-        "You must not modify prepare.py.\n"
-        "You must not modify program.md.\n"
-        "You must not modify pyproject.toml, uv.lock, or dependency files.\n"
-        "You must not change evaluation logic.\n"
-        "You must not add any external dependency.\n"
-        "You must return strict JSON.\n"
-        "Do not output any text outside JSON.\n"
-        "JSON must include field 'patch'.\n"
-        "patch must be a unified diff that git apply can apply.\n"
-        "Return only valid JSON. Do not use Markdown fences. "
-        "Do not include explanations outside JSON."
+        "Your task is to propose exactly one code experiment.\n"
+        "You MUST return only valid JSON.\n"
+        "Do not output Markdown.\n"
+        "Do not output git diff.\n"
+        "Do not output unified diff.\n"
+        "Do not output ```diff or ```json fences.\n"
+        "Do not include any text outside JSON.\n"
+        "You must use search-replace edits.\n"
+        "Each edit must include: file, old_text, new_text.\n"
+        "old_text must be copied exactly from the provided file content.\n"
+        "old_text must exist exactly once in that file.\n"
+        "Use relative paths only.\n"
+        "Do not use absolute Windows paths.\n"
+        "Only modify editable files.\n"
+        "Do not modify protected files.\n"
+        "Do not modify prepare.py.\n"
+        "Do not modify pyproject.toml.\n"
+        "Do not modify uv.lock.\n"
+        "Do not modify nightrunner.yaml.\n"
+        "Do not add dependencies.\n"
+        "Do not change evaluation logic.\n"
+        "For the current Auto-Research-Skill demo, the default editable file is train.py."
     )
 
 
@@ -40,9 +47,9 @@ def build_user_prompt(
         "editable_files": config.get("files", {}).get("editable", []),
         "protected_files": config.get("files", {}).get("protected", []),
         "train_command": config.get("execution", {}).get("train_command"),
-        "metric.name": config.get("metric", {}).get("name"),
+        "metric_name": config.get("metric", {}).get("name"),
         "lower_is_better": config.get("metric", {}).get("lower_is_better", True),
-        "best.json": best,
+        "current_best": best,
         "recent_experiments_summary": recent_experiments,
         "editable_file_full_contents": editable_file_contents,
         "json_schema": {
@@ -50,13 +57,32 @@ def build_user_prompt(
             "reason": "string",
             "expected_effect": "string",
             "risk": "string",
-            "files_to_modify": ["string"],
-            "patch": "string",
+            "edits": [
+                {
+                    "file": "train.py",
+                    "old_text": "exact old text from the file",
+                    "new_text": "replacement text",
+                }
+            ],
+        },
+        "schema_example": {
+            "hypothesis": "Increase ASPECT_RATIO from 64 to 96 to test a wider model.",
+            "reason": "The model may be under-capacity within the current benchmark.",
+            "expected_effect": "A wider model may reduce validation bpb if the extra capacity is useful.",
+            "risk": "It may increase VRAM usage and reduce training speed.",
+            "edits": [
+                {
+                    "file": "train.py",
+                    "old_text": "ASPECT_RATIO = 64        # model dim = depth * ASPECT_RATIO",
+                    "new_text": "ASPECT_RATIO = 96        # model dim = depth * ASPECT_RATIO",
+                }
+            ],
         },
     }
     return (
-        "Generate one experiment patch proposal using this context.\n"
-        "Return only valid JSON. Do not use Markdown fences. "
-        "Do not include explanations outside JSON.\n\n"
+        "Generate exactly one experiment with a small focused change.\n"
+        "Return only valid JSON. Do not use Markdown fences. Do not include explanations outside JSON.\n"
+        "old_text must be copied verbatim from provided file content and must be unique in the target file.\n"
+        "Use edits only. Do not return a patch field unless fallback is explicitly required.\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
