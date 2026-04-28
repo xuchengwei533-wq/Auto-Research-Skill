@@ -10,6 +10,11 @@
 - 主工作区默认不会被修改。
 - 成功实验需要用户手动 apply。
 
+NightRunner no longer asks the model to write git patches directly.
+The model returns structured search-replace edits.
+NightRunner applies those edits to an isolated worktree and then uses git diff to generate a valid patch.diff.
+This avoids invalid model-generated diff files.
+
 ## 使用步骤
 
 1. 安装依赖
@@ -75,6 +80,14 @@ uv run nightrunner apply exp_0001
 - 训练失败时看 `run.log`。
 - 模型输出错误时看 `response.json`。
 - patch 越权时看 `violation.json`。
+
+失败状态说明：
+
+- `invalid_response`: 模型输出不是合法 JSON。
+- `patch_error`: search-replace `old_text` 找不到、不唯一，或 legacy patch 无法应用。
+- `violation`: 修改了禁止文件。
+- `crash`: 训练失败或找不到指标。
+- `keep` / `discard`: 成功训练后的结果判断。
 
 # autoresearch
 
