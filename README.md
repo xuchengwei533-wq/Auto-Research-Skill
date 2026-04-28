@@ -55,19 +55,28 @@ setx DEEPSEEK_API_KEY "your-key"
 uv run nightrunner auth
 ```
 
-6. 开始夜跑
+6. 先跑基线
+
+```powershell
+uv run nightrunner baseline
+```
+
+这一步会运行原始 `train.py`，并把基线指标写入 `.nightrunner/state/best.json`。
+后续 AI 实验会先和这个基线比较，避免第一条成功实验被默认判定为 `keep`。
+
+7. 开始夜跑
 
 ```powershell
 uv run nightrunner night --rounds 3
 ```
 
-7. 查看报告
+8. 查看报告
 
 ```powershell
 uv run nightrunner report
 ```
 
-8. 应用成功实验
+9. 应用成功实验
 
 ```powershell
 uv run nightrunner apply exp_0001
@@ -77,6 +86,7 @@ uv run nightrunner apply exp_0001
 
 - 不要把 API key 写进代码。
 - 不要把 `.nightrunner/worktrees` 提交到 Git。
+- 如果还没有基线，请先执行 `uv run nightrunner baseline` 再执行 `night`。
 - 训练失败时看 `run.log`。
 - 模型输出错误时看 `response.json`。
 - patch 越权时看 `violation.json`。

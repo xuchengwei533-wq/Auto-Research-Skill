@@ -140,6 +140,118 @@ def init_project(project_root: Path) -> dict[str, Any]:
     }
 
 
+def _require_best_baseline(project_root: Path) -> dict[str, Any]:
+    best = load_best(project_root)
+    if not isinstance(best, dict) or best.get("metric_value") is None:
+        raise RuntimeError(
+            "未检测到可用基线。请先执行 `uv run nightrunner baseline`，"
+            "把原始 train.py 的指标写入 best.json。"
+        )
+    return best
+
+
+def run_baseline(project_root: Path, force: bool = False) -> Path:
+    """Run original train.py once and save the result into best.json as baseline."""
+    ensure_git_repo(project_root)
+    _ensure_layout(project_root)
+    config = load_config(project_root)
+    if config.get("safety", {}).get("require_clean_git", True):
+        ensure_clean_worktree(project_root)
+
+    existing_best = load_best(project_root)
+    if existing_best and not force:
+        raise RuntimeError(
+            "best.json 已存在记录。若要用原始 train.py 重新生成基线，请执行 "
+            "`uv run nightrunner baseline --force`。"
+        )
+
+    run_dir = ensure_dir(project_root / ".nightrunner" / "runs" / "baseline")
+    record: dict[str, Any] = {
+        "id": "baseline",
+        "status": "unknown",
+        "metric_name": config.get("metric", {}).get("name", "metric"),
+        "metric_value": None,
+        "hypothesis": "运行原始 train.py，建立对照基线。",
+        "reason": "先记录未经 AI 修改的原始指标，后续实验才能与真实基线比较。",
+        "expected_effect": "把原始训练结果写入 best.json，避免第一条成功实验被默认判定为 keep。",
+        "risk": "基线训练也可能超时、崩溃，或无法解析主指标。",
+        "run_dir": ".nightrunner/runs/baseline",
+        "patch_path": "(baseline 无 patch.diff)",
+        "created_at": now_iso(),
+        "is_baseline": True,
+    }
+    worktree_path: Path | None = None
+    try:
+        worktree_path = create_worktree(project_root, "baseline")
+        log_path = run_dir / "run.log"
+        run_result = run_training(
+            command=config.get("execution", {}).get("train_command", "uv run train.py"),
+            cwd=worktree_path,
+            log_path=log_path,
+            timeout_seconds=int(config.get("execution", {}).get("timeout_seconds", 3600)),
+        )
+        record["run_log_path"] = str(log_path)
+
+        if run_result.get("timeout"):
+            record["status"] = "timeout"
+            record["decision"] = "基线训练超时。"
+            _save_status(run_dir, {"status": "timeout", "is_baseline": True})
+            generate_experiment_report(project_root, "baseline", record)
+            return run_dir / "report.md"
+
+        if run_result.get("returncode") not in (0,):
+            record["status"] = "crash"
+            record["decision"] = "基线训练进程异常退出。"
+            _save_status(run_dir, {"status": "crash", "run_result": run_result, "is_baseline": True})
+            generate_experiment_report(project_root, "baseline", record)
+            return run_dir / "report.md"
+
+        metric_cfg = config.get("metric", {})
+        metrics = parse_metrics(log_path, metric_cfg.get("name", "val_bpb"))
+        write_json(run_dir / "metrics.json", metrics)
+        record["metrics"] = metrics
+        record["metric_value"] = metrics.get("metric_value")
+
+        if metrics.get("crashed") or metrics.get("metric_value") is None:
+            record["status"] = "crash"
+            record["decision"] = "基线运行完成，但未在 run.log 中找到主指标。"
+            _save_status(run_dir, {"status": "crash", "metrics": metrics, "is_baseline": True})
+            generate_experiment_report(project_root, "baseline", record)
+            return run_dir / "report.md"
+
+        save_best(
+            project_root,
+            {
+                "experiment_id": "baseline",
+                "metric_name": metrics.get("metric_name"),
+                "metric_value": metrics.get("metric_value"),
+                "patch_path": None,
+                "run_dir": ".nightrunner/runs/baseline",
+                "updated_at": now_iso(),
+                "is_baseline": True,
+            },
+        )
+        record["status"] = "keep"
+        record["decision"] = "基线已建立，best.json 已写入原始 train.py 的指标。"
+        _save_status(run_dir, {"status": "keep", "metrics": metrics, "is_baseline": True})
+        generate_experiment_report(project_root, "baseline", record)
+        return run_dir / "report.md"
+    except Exception as exc:  # pragma: no cover
+        record["status"] = "crash"
+        record["error"] = str(exc)
+        record["traceback"] = traceback.format_exc()
+        _save_status(run_dir, {"status": "crash", "error": str(exc), "is_baseline": True})
+        write_text(run_dir / "error.txt", record["traceback"])
+        generate_experiment_report(project_root, "baseline", record)
+        return run_dir / "report.md"
+    finally:
+        if worktree_path and worktree_path.exists():
+            try:
+                remove_worktree(project_root, worktree_path)
+            except GitError:
+                pass
+
+
 def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
     """Run N rounds of NightRunner experiments."""
     ensure_git_repo(project_root)
@@ -147,6 +259,8 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
     config = load_config(project_root)
     if config.get("safety", {}).get("require_clean_git", True):
         ensure_clean_worktree(project_root)
+    if not dry_run:
+        _require_best_baseline(project_root)
 
     for _ in range(rounds):
         exp_id = next_experiment_id(project_root)
@@ -169,7 +283,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
             editable = config.get("files", {}).get("editable", [])
             protected = config.get("files", {}).get("protected", [])
             recent = load_experiments(project_root)[-5:]
-            best = load_best(project_root)
+            best = _require_best_baseline(project_root) if not dry_run else load_best(project_root)
             file_contents = _collect_editable_contents(worktree_path, editable)
             system_prompt = build_system_prompt()
             user_prompt = build_user_prompt(config, best, recent, file_contents)
@@ -327,7 +441,7 @@ def run_night(project_root: Path, rounds: int, dry_run: bool = False) -> Path:
                 record["status"] = "crash"
                 record["decision"] = "在 run.log 中未找到主指标。"
             else:
-                best = load_best(project_root)
+                best = _require_best_baseline(project_root)
                 best_value = best.get("metric_value") if isinstance(best, dict) else None
                 is_keep = _is_better(
                     float(metrics["metric_value"]),

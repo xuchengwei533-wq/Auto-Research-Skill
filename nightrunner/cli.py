@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .report import generate_summary_report
-from .runner import apply_experiment, check_auth, clean, init_project, run_night
+from .runner import apply_experiment, check_auth, clean, init_project, run_baseline, run_night
 from .state_store import load_best, load_experiments
 
 
@@ -24,6 +24,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="仅执行到补丁校验，跳过训练。",
+    )
+
+    p_baseline = sub.add_parser("baseline", help="运行原始 train.py 基线并写入 best.json。")
+    p_baseline.add_argument(
+        "--force",
+        action="store_true",
+        help="即使已存在 best.json，也强制重新生成基线。",
     )
 
     p_report = sub.add_parser("report", help="生成并打印汇总报告。")
@@ -60,6 +67,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--rounds 必须大于 0")
             summary_path = run_night(project_root, rounds=args.rounds, dry_run=bool(args.dry_run))
             print(f"夜间运行完成。汇总: {summary_path}")
+            return 0
+
+        if args.command == "baseline":
+            report_path = run_baseline(project_root, force=bool(args.force))
+            print(f"基线运行完成。报告: {report_path}")
             return 0
 
         if args.command == "report":
