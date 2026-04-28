@@ -83,6 +83,6 @@ def apply_patch(worktree_path: Path, patch_text: str) -> None:
     try:
         run_git(["apply", str(patch_file)], worktree_path)
     except GitError as exc:
-        raise PatchApplyError(str(exc)) from exc
+        raise PatchApplyError(f"git apply failed: {exc}") from exc
     finally:
         patch_file.unlink(missing_ok=True)

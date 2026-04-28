@@ -12,20 +12,21 @@ from .utils import write_text
 CONFIG_FILE_NAME = "nightrunner.yaml"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "project": {"name": "default-project"},
+    "project": {"name": "Auto-Research-Skill"},
     "files": {
         "editable": ["train.py"],
         "protected": [
-            ".env",
-            ".env.local",
+            "prepare.py",
+            "program.md",
             "pyproject.toml",
-            "requirements.txt",
             "uv.lock",
             "README.md",
+            ".env",
+            ".env.local",
             "nightrunner.yaml",
         ],
     },
-    "execution": {"train_command": "uv run train.py", "timeout_seconds": 3600},
+    "execution": {"train_command": "uv run train.py", "timeout_seconds": 900},
     "metric": {"name": "val_bpb", "lower_is_better": True},
     "agent": {
         "provider": "deepseek",
@@ -53,6 +54,12 @@ NIGHTRUNNER_GITIGNORE_LINES = [
     ".nightrunner/runs/*/request.json",
     ".nightrunner/runs/*/response.json",
     ".nightrunner/config.local.yaml",
+    "",
+    "# Secrets",
+    ".env",
+    ".env.*",
+    "*.key",
+    "*.pem",
 ]
 
 

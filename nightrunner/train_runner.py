@@ -29,6 +29,7 @@ def run_training(command: str, cwd: Path, log_path: Path, timeout_seconds: int) 
             "returncode": proc.returncode,
             "timeout": False,
             "duration_seconds": round(time.time() - start, 3),
+            "error": None,
         }
     except subprocess.TimeoutExpired as exc:
         with log_path.open("a", encoding="utf-8") as f:
@@ -41,6 +42,7 @@ def run_training(command: str, cwd: Path, log_path: Path, timeout_seconds: int) 
             "returncode": None,
             "timeout": True,
             "duration_seconds": round(time.time() - start, 3),
+            "error": None,
         }
     except Exception as exc:  # pragma: no cover
         with log_path.open("a", encoding="utf-8") as f:

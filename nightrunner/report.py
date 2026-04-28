@@ -74,7 +74,6 @@ def generate_summary_report(project_root: Path) -> Path:
         "api_error": 0,
         "invalid_response": 0,
         "patch_error": 0,
-        "dry_run": 0,
     }
     for rec in experiments:
         status = rec.get("status")
@@ -93,7 +92,7 @@ def generate_summary_report(project_root: Path) -> Path:
         f"- Violation: {counts['violation']}",
         f"- API Error: {counts['api_error']}",
         f"- Invalid Response: {counts['invalid_response']}",
-        f"- Dry Run: {counts['dry_run']}",
+        f"- Patch Error: {counts['patch_error']}",
         "",
         "## Current Best",
         f"- Experiment: {(best or {}).get('experiment_id')}",
