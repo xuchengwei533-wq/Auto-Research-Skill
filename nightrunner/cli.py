@@ -7,8 +7,20 @@ import json
 import sys
 from pathlib import Path
 
+from .config import load_config
 from .report import generate_summary_report
-from .runner import apply_experiment, check_auth, clean, init_project, run_baseline, run_night
+from .runner import (
+    apply_experiment,
+    check_auth,
+    clean,
+    init_project,
+    run,
+    run_baseline,
+    run_night,
+    setup,
+    status,
+    tail,
+)
 from .state_store import load_best, load_experiments
 
 
@@ -40,6 +52,20 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate changes only and skip training.",
     )
+    p_night.add_argument("--plain", action="store_true", help="Force plain text output (disable rich UI).")
+
+    p_run = sub.add_parser("run", help="Run baseline check + night + report in one command.")
+    p_run.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_run.add_argument("--rounds", type=int, default=1, help="Number of rounds.")
+    p_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate changes only and skip training.",
+    )
+    p_run.add_argument("--plain", action="store_true", help="Force plain text output (disable rich UI).")
+
+    p_setup = sub.add_parser("setup", help="Interactive setup wizard for first-time use.")
+    p_setup.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
 
     p_baseline = sub.add_parser("baseline", help="Run baseline training and write best.json.")
     p_baseline.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
@@ -61,6 +87,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_clean.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
     p_auth = sub.add_parser("auth", help="Check API key environment variable.")
     p_auth.add_argument("--project", type=str, default=None, help="Optional project path.")
+
+    p_status = sub.add_parser("status", help="Show current run status and recent experiments.")
+    p_status.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_status.add_argument("--plain", action="store_true", help="Force plain text output.")
+
+    p_tail = sub.add_parser("tail", help="Show tail of latest or selected run.log.")
+    p_tail.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_tail.add_argument("--exp", type=str, default=None, help="Experiment ID, e.g. exp_0005.")
+    p_tail.add_argument("--lines", type=int, default=80, help="Number of lines from tail.")
+    p_tail.add_argument("-f", "--follow", action="store_true", help="Follow appended log output.")
     return parser
 
 
@@ -95,8 +131,30 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "night":
             if args.rounds <= 0:
                 raise ValueError("--rounds must be > 0")
-            summary_path = run_night(project_root, rounds=args.rounds, dry_run=bool(args.dry_run))
+            summary_path = run_night(
+                project_root,
+                rounds=args.rounds,
+                dry_run=bool(args.dry_run),
+                plain=bool(args.plain),
+            )
             print(f"Night run completed. Summary: {summary_path}")
+            return 0
+
+        if args.command == "run":
+            if args.rounds <= 0:
+                raise ValueError("--rounds must be > 0")
+            summary_path = run(
+                project_root,
+                rounds=args.rounds,
+                dry_run=bool(args.dry_run),
+                plain=bool(args.plain),
+            )
+            print(f"Run completed. Summary: {summary_path}")
+            return 0
+
+        if args.command == "setup":
+            result = setup(project_root)
+            print(f"Config file: {Path(result['config']).name}")
             return 0
 
         if args.command == "baseline":
@@ -110,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             best = load_best(project_root) or {}
             counts: dict[str, int] = {}
             for rec in experiments:
-                status = str(rec.get("status", "unknown"))
-                counts[status] = counts.get(status, 0) + 1
+                rec_status = str(rec.get("status", "unknown"))
+                counts[rec_status] = counts.get(rec_status, 0) + 1
             print(f"Summary generated: {summary_path}")
             print(f"Total experiments: {len(experiments)}")
             print(f"keep: {counts.get('keep', 0)}")
@@ -147,9 +205,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "auth":
-            result = check_auth(project_root)
+            try:
+                load_config(project_root)
+                result = check_auth(project_root)
+            except Exception:
+                result = check_auth()
             print(result["message"])
             return 0 if result["ok"] else 1
+
+        if args.command == "status":
+            status(project_root, plain=bool(args.plain))
+            return 0
+
+        if args.command == "tail":
+            if args.lines <= 0:
+                raise ValueError("--lines must be > 0")
+            tail(project_root, exp=args.exp, lines=int(args.lines), follow=bool(args.follow))
+            return 0
 
         parser.print_help()
         return 1

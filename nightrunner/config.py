@@ -106,6 +106,10 @@ def load_config(project_root: Path) -> dict[str, Any]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Invalid config format in {path}. Root must be a mapping.")
+    metric = raw.get("metric", {})
+    if isinstance(metric, dict) and "regex" in metric and metric["regex"] is not None:
+        if not isinstance(metric["regex"], str):
+            raise ValueError("metric.regex must be a string when provided.")
     return raw
 
 
