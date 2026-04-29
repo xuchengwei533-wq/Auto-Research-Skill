@@ -494,12 +494,18 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         return run_dir / "report.md"
 
 
-def run_night(project_root: Path, rounds: int, dry_run: bool = False, plain: bool = False) -> Path:
+def run_night(
+    project_root: Path,
+    rounds: int,
+    dry_run: bool = False,
+    plain: bool = False,
+    ui: RunUI | None = None,
+) -> Path:
     """Run N rounds of NightRunner experiments."""
     ensure_git_repo(project_root)
     _ensure_layout(project_root)
     config = load_config(project_root)
-    ui = RunUI(enabled=not plain)
+    ui = ui or RunUI(enabled=not plain)
     _print_config_summary(project_root, config, "NightRunner configuration", emit=ui.log)
     ui.start_run(project_root, config, rounds, baseline_info="checked at startup")
     if config.get("safety", {}).get("require_clean_git", True):

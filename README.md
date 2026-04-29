@@ -109,6 +109,7 @@ If you prefer plain logs (or in CI):
 
 ```powershell
 nightrunner run --rounds 58 --plain
+nightrunner night --rounds 58 --plain
 ```
 
 ## Configuration
