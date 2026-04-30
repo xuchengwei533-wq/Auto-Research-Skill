@@ -12,6 +12,8 @@ def request_patch(
     system_prompt: str,
     user_prompt: str,
     model: str,
+    base_url: str = "https://api.deepseek.com",
+    api_key_env: str = "DEEPSEEK_API_KEY",
     reasoning_effort: str = "high",
     thinking_enabled: bool = True,
     on_start: Callable[[], None] | None = None,
@@ -21,11 +23,13 @@ def request_patch(
     """Request one experiment proposal from DeepSeek API."""
     from openai import OpenAI
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = os.environ.get(api_key_env)
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not set. Please configure it in environment variables.")
+        raise RuntimeError(
+            f"{api_key_env} is not set. Please configure it in environment variables."
+        )
 
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+    client = OpenAI(api_key=api_key, base_url=base_url)
     extra_body = {"thinking": {"type": "enabled"}} if thinking_enabled else None
     retry_delays = [0, 5, 15, 30]
     last_exc: Exception | None = None

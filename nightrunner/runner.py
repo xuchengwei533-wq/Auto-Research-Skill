@@ -584,6 +584,8 @@ def run_night(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     model=config.get("agent", {}).get("model", "deepseek-v4-pro"),
+                    base_url=config.get("agent", {}).get("base_url", "https://api.deepseek.com"),
+                    api_key_env=config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"),
                     reasoning_effort=config.get("agent", {}).get("reasoning_effort", "high"),
                     thinking_enabled=config.get("agent", {}).get("thinking_enabled", True),
                     on_start=lambda: ui.log(f"[{exp_id}] Calling LLM API..."),
@@ -840,8 +842,19 @@ def run(project_root: Path, rounds: int = 1, dry_run: bool = False, plain: bool 
     return summary_path
 
 
-def setup(project_root: Path) -> dict[str, Any]:
-    """Interactive setup wizard for first-time onboarding."""
+def setup(
+    project_root: Path,
+    editable_files: list[str] | None = None,
+    train_command: str | None = None,
+    metric_name: str | None = None,
+    lower_is_better: bool | None = None,
+    api_key_env: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    run_baseline_now: bool = False,
+    yes: bool = False,
+) -> dict[str, Any]:
+    """Interactive or semi-automated setup wizard for first-time onboarding."""
     print(f"Project root: {project_root}")
     if not _is_git_available():
         raise RuntimeError("Git is not available in PATH. Please install Git first.")
@@ -852,7 +865,8 @@ def setup(project_root: Path) -> dict[str, Any]:
         print("git init")
         print("git add .")
         print("git commit -m \"Initial commit\"")
-        if not _prompt_yes_no("Run these commands now?", default_yes=False):
+        auto_init = yes or _prompt_yes_no("Run these commands now?", default_yes=False)
+        if not auto_init:
             raise RuntimeError("Setup cancelled. Initialize Git repository and run setup again.")
         run_git(["init"], project_root)
         run_git(["add", "."], project_root)
@@ -863,55 +877,85 @@ def setup(project_root: Path) -> dict[str, Any]:
                 raise
 
     candidates = _scan_python_files(project_root)
-    print("")
-    print("Detected Python files:")
-    for idx, path in enumerate(candidates, start=1):
-        print(f"[{idx}] {path}")
-    print("")
-    print("Select editable files for AI experiments, separated by commas:")
-    selection = input("> ")
-    editable_files = _parse_editable_selection(selection, candidates)
+    selected_editable = editable_files
+    if selected_editable is None:
+        print("")
+        print("Detected Python files:")
+        for idx, path in enumerate(candidates, start=1):
+            print(f"[{idx}] {path}")
+        print("")
+        if yes:
+            selected_editable = [candidates[0]] if candidates else ["train.py"]
+            print(f"Editable files [auto]: {', '.join(selected_editable)}")
+        else:
+            print("Select editable files for AI experiments, separated by commas:")
+            selection = input("> ")
+            selected_editable = _parse_editable_selection(selection, candidates)
 
     default_train = _detect_train_command_default(candidates)
-    print("")
-    train_command = input(f"Training command [{default_train}]:\n> ").strip() or default_train
+    if train_command is None:
+        if yes:
+            train_command = default_train
+            print(f"Training command [auto]: {train_command}")
+        else:
+            print("")
+            train_command = input(f"Training command [{default_train}]:\n> ").strip() or default_train
 
-    print("")
-    metric_name = input("Metric name [val_loss]:\n> ").strip() or "val_loss"
-    lower_is_better = _prompt_yes_no("Is lower better for this metric?", default_yes=True)
+    if metric_name is None:
+        if yes:
+            metric_name = "val_loss"
+            print(f"Metric name [auto]: {metric_name}")
+        else:
+            print("")
+            metric_name = input("Metric name [val_loss]:\n> ").strip() or "val_loss"
+    if lower_is_better is None:
+        lower_is_better = True if yes else _prompt_yes_no("Is lower better for this metric?", default_yes=True)
 
-    print("")
-    print("Optional metric regex.")
-    print("Leave empty to parse formats like \"val_loss: 0.123\".")
-    print("Example: Average loss:\\s*([0-9.]+)")
-    metric_regex = input("\nMetric regex:\n> ").strip()
+    metric_regex = ""
+    if not yes:
+        print("")
+        print("Optional metric regex.")
+        print("Leave empty to parse formats like \"val_loss: 0.123\".")
+        print("Example: Average loss:\\s*([0-9.]+)")
+        metric_regex = input("\nMetric regex:\n> ").strip()
 
-    print("")
-    api_key_env = input("API key environment variable name [DEEPSEEK_API_KEY]:\n> ").strip()
+    if api_key_env is None:
+        if yes:
+            api_key_env = "DEEPSEEK_API_KEY"
+            print(f"API key environment variable name [auto]: {api_key_env}")
+        else:
+            print("")
+            api_key_env = input("API key environment variable name [DEEPSEEK_API_KEY]:\n> ").strip()
     if not api_key_env:
         api_key_env = "DEEPSEEK_API_KEY"
     if os.environ.get(api_key_env):
         print(f"{api_key_env} is already set.")
     else:
-        if _prompt_yes_no(f"Set {api_key_env} for current session now?", default_yes=False):
+        should_set = False if yes else _prompt_yes_no(f"Set {api_key_env} for current session now?", default_yes=False)
+        if should_set:
             key = input("Paste API key:\n> ").strip()
             if key:
                 os.environ[api_key_env] = key
                 print(f"{api_key_env} is set for current process.")
 
-    if _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True):
+    should_update_gitignore = True if yes else _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True)
+    if should_update_gitignore:
         _update_gitignore_with_lines(project_root, SETUP_GITIGNORE_LINES)
 
     init_result = init_project(
         project_root=project_root,
-        editable_files=editable_files,
+        editable_files=selected_editable,
         train_command=train_command,
         metric_name=metric_name,
-        lower_is_better=lower_is_better,
+        lower_is_better=bool(lower_is_better),
         update_gitignore=False,
     )
     cfg = load_config(project_root)
     cfg.setdefault("agent", {})["api_key_env"] = api_key_env
+    if base_url:
+        cfg.setdefault("agent", {})["base_url"] = base_url
+    if model:
+        cfg.setdefault("agent", {})["model"] = model
     if metric_regex:
         cfg.setdefault("metric", {})["regex"] = metric_regex
     else:
@@ -927,7 +971,7 @@ def setup(project_root: Path) -> dict[str, Any]:
     print(project_root)
     print("")
     print("Editable files:")
-    for path in editable_files:
+    for path in selected_editable or []:
         print(f"- {path}")
     print("")
     print("Train command:")
@@ -945,7 +989,8 @@ def setup(project_root: Path) -> dict[str, Any]:
     print("State dir:")
     print(project_root / ".nightrunner")
 
-    if _prompt_yes_no("Run baseline now?", default_yes=True):
+    should_run_baseline = run_baseline_now or (False if yes and not run_baseline_now else _prompt_yes_no("Run baseline now?", default_yes=True))
+    if should_run_baseline:
         run_baseline(project_root)
     return init_result
 

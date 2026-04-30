@@ -66,6 +66,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_setup = sub.add_parser("setup", help="Interactive setup wizard for first-time use.")
     p_setup.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_setup.add_argument(
+        "--editable",
+        action="append",
+        default=[],
+        help="Editable file (repeatable), e.g. --editable train.py --editable model.py",
+    )
+    p_setup.add_argument("--train-command", type=str, default=None, help="Training command.")
+    p_setup.add_argument("--metric", type=str, default=None, help="Primary metric name.")
+    p_setup.add_argument("--api-key-env", type=str, default=None, help="API key environment variable name.")
+    p_setup.add_argument("--base-url", type=str, default=None, help="OpenAI-compatible API base URL.")
+    p_setup.add_argument("--model", type=str, default=None, help="Model name, e.g. deepseek-v4-pro.")
+    p_setup.add_argument("--run-baseline", action="store_true", help="Run baseline after setup completes.")
+    p_setup.add_argument("--yes", action="store_true", help="Accept defaults and minimize prompts.")
+    p_setup_mode = p_setup.add_mutually_exclusive_group()
+    p_setup_mode.add_argument("--lower-is-better", action="store_true")
+    p_setup_mode.add_argument("--higher-is-better", action="store_true")
 
     p_baseline = sub.add_parser("baseline", help="Run baseline training and write best.json.")
     p_baseline.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
@@ -153,7 +169,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "setup":
-            result = setup(project_root)
+            lower_is_better = None
+            if bool(args.higher_is_better):
+                lower_is_better = False
+            elif bool(args.lower_is_better):
+                lower_is_better = True
+            result = setup(
+                project_root,
+                editable_files=list(args.editable) if args.editable else None,
+                train_command=args.train_command,
+                metric_name=args.metric,
+                lower_is_better=lower_is_better,
+                api_key_env=args.api_key_env,
+                base_url=args.base_url,
+                model=args.model,
+                run_baseline_now=bool(args.run_baseline),
+                yes=bool(args.yes),
+            )
             print(f"Config file: {Path(result['config']).name}")
             return 0
 
