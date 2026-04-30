@@ -56,12 +56,8 @@ DEFAULT_CONFIG: dict[str, Any] = build_default_config("Auto-Research-Skill")
 
 NIGHTRUNNER_GITIGNORE_LINES = [
     "# NightRunner local state",
-    ".nightrunner/worktrees/",
-    ".nightrunner/tmp/",
-    ".nightrunner/cache/",
-    ".nightrunner/runs/*/run.log",
-    ".nightrunner/runs/*/request.json",
-    ".nightrunner/runs/*/response.json",
+    ".nightrunner/",
+    "nightrunner_summary.md",
     ".nightrunner/config.local.yaml",
     "",
     "# Secrets",

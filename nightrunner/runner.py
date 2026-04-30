@@ -77,12 +77,8 @@ def _update_gitignore(project_root: Path) -> None:
 
 SETUP_GITIGNORE_LINES = [
     "# NightRunner runtime artifacts",
-    ".nightrunner/worktrees/",
-    ".nightrunner/tmp/",
-    ".nightrunner/cache/",
-    ".nightrunner/runs/*/run.log",
-    ".nightrunner/runs/*/request.json",
-    ".nightrunner/runs/*/response.json",
+    ".nightrunner/",
+    "nightrunner_summary.md",
 ]
 
 
