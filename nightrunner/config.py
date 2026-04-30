@@ -55,10 +55,9 @@ def build_default_config(
 DEFAULT_CONFIG: dict[str, Any] = build_default_config("Auto-Research-Skill")
 
 NIGHTRUNNER_GITIGNORE_LINES = [
-    "# NightRunner local state",
+    "# NightRunner generated artifacts",
     ".nightrunner/",
     "nightrunner_summary.md",
-    ".nightrunner/config.local.yaml",
     "",
     "# Secrets",
     ".env",

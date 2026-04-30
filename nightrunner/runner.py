@@ -75,13 +75,6 @@ def _update_gitignore(project_root: Path) -> None:
         write_text(path, "\n".join(lines) + "\n")
 
 
-SETUP_GITIGNORE_LINES = [
-    "# NightRunner runtime artifacts",
-    ".nightrunner/",
-    "nightrunner_summary.md",
-]
-
-
 def _update_gitignore_with_lines(project_root: Path, lines_to_add: list[str]) -> None:
     path = project_root / ".gitignore"
     current = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -936,7 +929,7 @@ def setup(
 
     should_update_gitignore = True if yes else _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True)
     if should_update_gitignore:
-        _update_gitignore_with_lines(project_root, SETUP_GITIGNORE_LINES)
+        _update_gitignore_with_lines(project_root, NIGHTRUNNER_GITIGNORE_LINES)
 
     init_result = init_project(
         project_root=project_root,
