@@ -75,19 +75,6 @@ def _update_gitignore(project_root: Path) -> None:
         write_text(path, "\n".join(lines) + "\n")
 
 
-def _update_gitignore_with_lines(project_root: Path, lines_to_add: list[str]) -> None:
-    path = project_root / ".gitignore"
-    current = path.read_text(encoding="utf-8") if path.exists() else ""
-    lines = current.splitlines()
-    existing = set(lines)
-    to_add = [line for line in lines_to_add if line not in existing]
-    if to_add:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.extend(to_add)
-        write_text(path, "\n".join(lines) + "\n")
-
-
 def _is_git_available() -> bool:
     try:
         result = subprocess.run(
@@ -929,7 +916,7 @@ def setup(
 
     should_update_gitignore = True if yes else _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True)
     if should_update_gitignore:
-        _update_gitignore_with_lines(project_root, NIGHTRUNNER_GITIGNORE_LINES)
+        _update_gitignore(project_root)
 
     init_result = init_project(
         project_root=project_root,
