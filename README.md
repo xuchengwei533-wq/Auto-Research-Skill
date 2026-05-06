@@ -52,7 +52,7 @@ If `nightrunner` is not found on Windows after a `uv` install, run `uv tool upda
 
 ```powershell
 nightrunner init --editable main.py --train-command "python main.py" --metric val_loss --lower-is-better
-nightrunner setup --project D:\MyDeepLearningProject --yes --run-baseline
+nightrunner setup --project D:\MyDeepLearningProject --yes
 nightrunner baseline
 nightrunner night --rounds 8
 nightrunner report
