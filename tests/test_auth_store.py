@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from nightrunner import auth_store
@@ -16,7 +17,11 @@ def test_save_load_delete_api_key(monkeypatch, tmp_path: Path) -> None:
         base_url="https://api.deepseek.com",
     )
 
-    assert path == tmp_path / "AppData" / "Roaming" / "nightrunner" / "config.json"
+    if os.name == "nt":
+        expected = tmp_path / "AppData" / "Roaming" / "nightrunner" / "config.json"
+    else:
+        expected = tmp_path / ".config" / "nightrunner" / "config.json"
+    assert path == expected
     assert path.exists()
     assert auth_store.load_api_key("deepseek") == "sk-test-1234abcd"
 
