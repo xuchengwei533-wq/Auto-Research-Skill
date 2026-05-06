@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .utils import ensure_dir
 
@@ -77,13 +76,8 @@ def ensure_clean_worktree(path: Path) -> None:
 
 
 def get_worktrees_root(project_root: Path) -> Path:
-    """Return the user cache root for isolated worktrees."""
-    project_hash = hashlib.sha256(str(project_root.resolve()).encode("utf-8")).hexdigest()[:16]
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return ensure_dir(base / "nightrunner" / "worktrees" / project_hash)
+    """Return the project-local worktree root."""
+    return ensure_dir(project_root / ".nightrunner" / "worktrees")
 
 
 def _list_worktrees(project_root: Path) -> list[dict[str, str]]:
@@ -113,8 +107,17 @@ def _find_worktree_branch(project_root: Path, worktree_path: Path) -> str | None
     return None
 
 
+def _branch_is_active_in_worktrees(project_root: Path, branch_name: str) -> bool:
+    for item in _list_worktrees(project_root):
+        if item.get("branch") == branch_name:
+            return True
+    return False
+
+
 def _delete_branch_if_temporary(project_root: Path, branch_name: str | None) -> bool:
     if not branch_name or not branch_name.startswith("nightrunner/"):
+        return False
+    if _branch_is_active_in_worktrees(project_root, branch_name):
         return False
     run_git(["branch", "-D", branch_name], project_root)
     return True
@@ -128,11 +131,31 @@ def list_temporary_branches(project_root: Path) -> list[str]:
 
 def clean_temporary_branches(project_root: Path) -> list[str]:
     """Delete leftover NightRunner branches."""
+    return cleanup_nightrunner_branches(project_root)["removed_branches"]
+
+
+def cleanup_nightrunner_branches(project_root: Path) -> dict[str, Any]:
+    """Delete temporary NightRunner branches not used by any active worktree."""
     removed: list[str] = []
+    skipped: list[str] = []
+    active_branches = {
+        item.get("branch", "")
+        for item in _list_worktrees(project_root)
+        if item.get("branch", "").startswith("nightrunner/")
+    }
     for branch_name in list_temporary_branches(project_root):
-        run_git(["branch", "-D", branch_name], project_root)
-        removed.append(branch_name)
-    return removed
+        if branch_name in active_branches:
+            skipped.append(branch_name)
+            continue
+        try:
+            run_git(["branch", "-D", branch_name], project_root)
+            removed.append(branch_name)
+        except GitError:
+            skipped.append(branch_name)
+    return {
+        "removed_branches": removed,
+        "skipped_branches": skipped,
+    }
 
 
 def create_worktree(project_root: Path, exp_id: str) -> tuple[Path, str]:

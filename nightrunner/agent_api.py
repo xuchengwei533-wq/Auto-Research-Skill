@@ -20,10 +20,14 @@ def resolve_api_settings(
     if env_api_key:
         return env_api_key, base_url
 
-    stored_api_key = load_api_key(provider)
+    provider_name = (provider or "deepseek").lower()
+    if provider_name == "deepseek":
+        stored_api_key = load_api_key("deepseek")
+    else:
+        stored_api_key = None
     if stored_api_key:
         auth_cfg = load_auth_config()
-        provider_cfg = auth_cfg.get("providers", {}).get(provider, {})
+        provider_cfg = auth_cfg.get("providers", {}).get("deepseek", {})
         stored_base_url = (
             provider_cfg.get("base_url")
             if isinstance(provider_cfg, dict)
@@ -32,8 +36,8 @@ def resolve_api_settings(
         return stored_api_key, str(stored_base_url or base_url)
 
     raise RuntimeError(
-        f"{api_key_env} is not set and no saved {provider} API key was found. "
-        "Run `nightrunner auth login` or set the environment variable."
+        "No API key found.\n"
+        "Run `nightrunner auth login` or set DEEPSEEK_API_KEY."
     )
 
 

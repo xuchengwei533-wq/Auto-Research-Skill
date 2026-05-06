@@ -6,25 +6,26 @@ It is installed as a CLI tool and runs inside your own Git project.
 
 ## Quick Start
 
-Recommended installation with `uv`:
+Windows PowerShell:
 
 ```powershell
-uv tool install --force "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.ps1 | iex"
+```
+
+macOS/Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.sh | bash
+```
+
+Then:
+
+```powershell
 nightrunner auth login
 cd D:\MyDeepLearningProject
 nightrunner setup
 nightrunner run --rounds 8
-notepad nightrunner_summary.md
 ```
-
-Fallback installation with `pip`:
-
-```powershell
-python -m pip install --user --upgrade "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
-```
-
-NightRunner is a CLI tool. Install it globally with `uv tool install` when possible instead of putting it inside your machine learning project's virtual environment.
-After installation, run NightRunner inside your own machine learning project, not inside this `Auto-Research-Skill` tool repository.
 
 ## Manual Install
 
@@ -71,7 +72,9 @@ Core commands:
 - `nightrunner report`
 - `nightrunner apply`
 - `nightrunner clean`
-- `nightrunner auth`
+- `nightrunner auth login`
+- `nightrunner auth status`
+- `nightrunner auth logout`
 
 Authentication commands:
 
@@ -101,18 +104,13 @@ git commit -m "Initial commit"
 
 ## Safety Model
 
-- AI edits are applied only inside isolated Git worktrees stored in the user cache directory.
+- AI edits are applied only inside `.nightrunner/worktrees/`.
 - Main workspace changes only after `nightrunner apply exp_xxxx`.
-- API key can be stored with `nightrunner auth login` or provided through `DEEPSEEK_API_KEY`.
-- API key is not written into the project directory or `nightrunner.yaml`.
+- API key is read from `DEEPSEEK_API_KEY` first, then from the user-level NightRunner auth config created by `nightrunner auth login`.
+- API key is never written to the target project directory or `nightrunner.yaml`.
 - Training dependencies belong to the user project, not NightRunner.
 - `.nightrunner/` stores lightweight local state, reports, and patch metadata.
 - `nightrunner_summary.md` is written to your project root.
-
-Worktree locations:
-
-- Windows: `%LOCALAPPDATA%/nightrunner/worktrees/<project_hash>/exp_xxxx`
-- macOS/Linux: `~/.cache/nightrunner/worktrees/<project_hash>/exp_xxxx`
 
 ## API Key Configuration
 

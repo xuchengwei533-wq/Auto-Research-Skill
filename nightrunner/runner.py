@@ -21,7 +21,7 @@ from .git_ops import (
     GitError,
     WorktreeSetupError,
     apply_patch_to_project,
-    clean_temporary_branches,
+    cleanup_nightrunner_branches,
     create_worktree,
     ensure_clean_worktree,
     ensure_git_repo,
@@ -1170,10 +1170,18 @@ def clean(project_root: Path, branches: bool = False) -> dict[str, Any]:
     removed = 0
     failed: list[str] = []
     removed_branches: list[str] = []
+    skipped_branches: list[str] = []
     if not worktrees_root.exists():
         if branches:
-            removed_branches = clean_temporary_branches(project_root)
-        return {"removed": 0, "failed": [], "removed_branches": removed_branches}
+            branch_result = cleanup_nightrunner_branches(project_root)
+            removed_branches = branch_result["removed_branches"]
+            skipped_branches = branch_result["skipped_branches"]
+        return {
+            "removed": 0,
+            "failed": [],
+            "removed_branches": removed_branches,
+            "skipped_branches": skipped_branches,
+        }
 
     for child in worktrees_root.iterdir():
         if not child.is_dir():
@@ -1184,8 +1192,15 @@ def clean(project_root: Path, branches: bool = False) -> dict[str, Any]:
         except Exception:
             failed.append(child.name)
     if branches:
-        removed_branches = clean_temporary_branches(project_root)
-    return {"removed": removed, "failed": failed, "removed_branches": removed_branches}
+        branch_result = cleanup_nightrunner_branches(project_root)
+        removed_branches = branch_result["removed_branches"]
+        skipped_branches = branch_result["skipped_branches"]
+    return {
+        "removed": removed,
+        "failed": failed,
+        "removed_branches": removed_branches,
+        "skipped_branches": skipped_branches,
+    }
 
 
 def check_auth(project_root: Path | None = None) -> dict[str, Any]:
@@ -1215,7 +1230,7 @@ def check_auth(project_root: Path | None = None) -> dict[str, Any]:
         }
     return {
         "ok": False,
-        "source": None,
+        "source": "missing",
         "message": f"No API key found. Run `nightrunner auth login` or set {env_name}.",
         "masked_key": None,
     }

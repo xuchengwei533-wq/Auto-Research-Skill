@@ -5,15 +5,21 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 from pathlib import Path
 
-from .auth_store import delete_api_key, get_config_path as get_auth_config_path, save_api_key
+from .auth_store import (
+    delete_api_key,
+    get_config_path as get_auth_config_path,
+    load_api_key,
+    mask_api_key,
+    save_api_key,
+)
 from .config import load_config
 from .report import generate_summary_report
 from .runner import (
     apply_experiment,
-    check_auth,
     clean,
     init_project,
     run,
@@ -133,6 +139,32 @@ def _project_root(project_arg: str | None) -> Path:
     return Path.cwd().resolve()
 
 
+def _auth_status() -> dict[str, str | bool | None]:
+    env_name = "DEEPSEEK_API_KEY"
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return {
+            "ok": True,
+            "message": f"{env_name} is set in environment ({mask_api_key(env_value)}).",
+            "source": "environment",
+            "masked_key": mask_api_key(env_value),
+        }
+    stored_key = load_api_key("deepseek")
+    if stored_key:
+        return {
+            "ok": True,
+            "message": f"DeepSeek API key is configured in user config ({mask_api_key(stored_key)}).",
+            "source": "user_config",
+            "masked_key": mask_api_key(stored_key),
+        }
+    return {
+        "ok": False,
+        "message": "No API key found. Run `nightrunner auth login` or set DEEPSEEK_API_KEY.",
+        "source": "missing",
+        "masked_key": None,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -243,10 +275,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "clean":
             result = clean(project_root, branches=bool(args.branches))
             print(f"Worktrees removed: {result['removed']}")
-            if result["failed"]:
-                print("Failed to remove:", ", ".join(result["failed"]))
-            if result.get("removed_branches"):
-                print("Branches removed:", ", ".join(result["removed_branches"]))
+            print("Failed worktrees:", ", ".join(result["failed"]) if result["failed"] else "(none)")
+            print(
+                "Removed branches:",
+                ", ".join(result.get("removed_branches", [])) if result.get("removed_branches") else "(none)",
+            )
+            print(
+                "Skipped branches:",
+                ", ".join(result.get("skipped_branches", [])) if result.get("skipped_branches") else "(none)",
+            )
             return 0
 
         if args.command == "auth":
@@ -265,11 +302,7 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print("No saved DeepSeek API key found.")
                 return 0
-            try:
-                load_config(project_root)
-                result = check_auth(project_root)
-            except Exception:
-                result = check_auth()
+            result = _auth_status()
             print(result["message"])
             return 0 if result["ok"] else 1
 

@@ -10,6 +10,9 @@ dependencies = [
     "rich>=13.7.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 nightrunner = "nightrunner.cli:main"
 

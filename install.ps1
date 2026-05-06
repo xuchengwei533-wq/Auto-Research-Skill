@@ -66,7 +66,19 @@ if ($UseUv) {
 $RunnerCmd = $null
 Write-Step "Verifying installation"
 if (Get-Command nightrunner -ErrorAction SilentlyContinue) {
-    Invoke-Checked "nightrunner --help"
+    $helpOutput = & nightrunner --help 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $helpText = ($helpOutput | Out-String)
+        if ($helpText -match "uv trampoline" -or $helpText -match "trampoline") {
+            Write-Warning "nightrunner --help failed and looks like an old uv trampoline issue."
+            Write-Host "Try:" -ForegroundColor Yellow
+            Write-Host "  uv tool uninstall nightrunner"
+            Write-Host "  uv tool install --force `"$RepoUrl`""
+            Write-Host "  uv tool update-shell"
+            Write-Host "  restart the terminal"
+        }
+        throw "nightrunner --help failed.`n$helpText"
+    }
     $RunnerCmd = "nightrunner"
 } else {
     Write-Warning "nightrunner is not on PATH yet."
