@@ -13,6 +13,7 @@ from typing import Any
 
 from . import __version__
 from .agent_api import request_patch
+from .auth_store import load_api_key, mask_api_key
 from .console_ui import RunUI
 from .config import NIGHTRUNNER_GITIGNORE_LINES, load_config, write_default_config_if_missing
 from .diff_analyzer import analyze_diff
@@ -20,9 +21,11 @@ from .git_ops import (
     GitError,
     WorktreeSetupError,
     apply_patch_to_project,
+    clean_temporary_branches,
     create_worktree,
     ensure_clean_worktree,
     ensure_git_repo,
+    get_worktrees_root,
     is_git_repo,
     remove_worktree,
     run_git,
@@ -57,9 +60,9 @@ def _ensure_layout(project_root: Path) -> None:
     base = _nightrunner_dir(project_root)
     ensure_dir(base / "state")
     ensure_dir(base / "runs")
-    ensure_dir(base / "worktrees")
     ensure_dir(base / "cache")
     ensure_dir(base / "tmp")
+    ensure_dir(get_worktrees_root(project_root))
 
 
 def _update_gitignore(project_root: Path) -> None:
@@ -269,7 +272,7 @@ def _print_config_summary(
     out(metric_cfg.get("regex"))
     out("")
     out("Worktree root:")
-    out(project_root / ".nightrunner" / "worktrees")
+    out(get_worktrees_root(project_root))
     out("")
     out("Agent:")
     out(f"provider: {agent.get('provider', 'deepseek')}")
@@ -525,7 +528,13 @@ def run_night(
             t_stage = perf_counter()
             ui.set_stage("Creating git worktree")
             try:
-                worktree_path = create_worktree(project_root, exp_id)
+                worktree_path, branch_name = create_worktree(project_root, exp_id)
+                record["branch_name"] = branch_name
+                record["worktree_path"] = str(worktree_path)
+                write_json(
+                    run_dir / "worktree.json",
+                    {"branch_name": branch_name, "worktree_path": str(worktree_path)},
+                )
             except WorktreeSetupError as exc:
                 record["status"] = "setup_error"
                 record["error"] = str(exc)
@@ -624,9 +633,23 @@ def run_night(
             except (PatchApplyError, SearchReplaceError, InvalidModelResponse) as exc:
                 record["status"] = "patch_error"
                 record["error"] = str(exc)
+                if isinstance(exc, SearchReplaceError):
+                    record["error_type"] = "search_replace_error"
+                elif isinstance(exc, PatchApplyError):
+                    record["error_type"] = "patch_apply_error"
+                else:
+                    record["error_type"] = "invalid_model_response"
                 record["timings"]["patch_seconds"] = perf_counter() - t_stage
                 record["timings"]["total_seconds"] = perf_counter() - t_total
-                _save_status(run_dir, {"status": "patch_error", "error": str(exc), "timings": record["timings"]})
+                _save_status(
+                    run_dir,
+                    {
+                        "status": "patch_error",
+                        "error": str(exc),
+                        "error_type": record["error_type"],
+                        "timings": record["timings"],
+                    },
+                )
                 generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
                 generate_summary_report(project_root)
@@ -674,9 +697,17 @@ def run_night(
                 t_report = perf_counter()
                 generate_experiment_report(project_root, exp_id, record)
                 record["timings"]["report_seconds"] = perf_counter() - t_report
-                generate_experiment_report(project_root, exp_id, record)
                 append_experiment(project_root, record)
-                _save_status(run_dir, {"status": "discard", "dry_run": True, "timings": record["timings"]})
+                _save_status(
+                    run_dir,
+                    {
+                        "status": "discard",
+                        "dry_run": True,
+                        "timings": record["timings"],
+                        "branch_name": record.get("branch_name"),
+                        "worktree_path": record.get("worktree_path"),
+                    },
+                )
                 ui.set_stage("Updating summary")
                 generate_summary_report(project_root)
                 ui.finish_experiment(record)
@@ -749,11 +780,19 @@ def run_night(
             t_report = perf_counter()
             generate_experiment_report(project_root, exp_id, record)
             record["timings"]["report_seconds"] = perf_counter() - t_report
-            generate_experiment_report(project_root, exp_id, record)
             append_experiment(project_root, record)
             ui.set_stage("Updating summary")
             generate_summary_report(project_root)
-            _save_status(run_dir, {"status": record["status"], "metrics": record.get("metrics"), "timings": record["timings"]})
+            _save_status(
+                run_dir,
+                {
+                    "status": record["status"],
+                    "metrics": record.get("metrics"),
+                    "timings": record["timings"],
+                    "branch_name": record.get("branch_name"),
+                    "worktree_path": record.get("worktree_path"),
+                },
+            )
             ui.finish_experiment(record)
         except Exception as exc:  # pragma: no cover
             record["status"] = "crash"
@@ -770,7 +809,7 @@ def run_night(
         finally:
             if worktree_path and worktree_path.exists() and record.get("status") != "keep":
                 try:
-                    remove_worktree(project_root, worktree_path)
+                    remove_worktree(project_root, worktree_path, record.get("branch_name"))
                 except GitError:
                     pass
 
@@ -799,7 +838,8 @@ def run(project_root: Path, rounds: int = 1, dry_run: bool = False, plain: bool 
     if not auth["ok"]:
         env_name = str(config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"))
         raise RuntimeError(
-            f"{env_name} is not set.\nSet it with:\n$env:{env_name}=\"your-key\""
+            f"No API key found.\nRun `nightrunner auth login`\n"
+            f"or set {env_name} in your environment."
         )
 
     if not _baseline_exists(project_root):
@@ -896,23 +936,9 @@ def setup(
         metric_regex = input("\nMetric regex:\n> ").strip()
 
     if api_key_env is None:
-        if yes:
-            api_key_env = "DEEPSEEK_API_KEY"
-            print(f"API key environment variable name [auto]: {api_key_env}")
-        else:
-            print("")
-            api_key_env = input("API key environment variable name [DEEPSEEK_API_KEY]:\n> ").strip()
+        api_key_env = "DEEPSEEK_API_KEY"
     if not api_key_env:
         api_key_env = "DEEPSEEK_API_KEY"
-    if os.environ.get(api_key_env):
-        print(f"{api_key_env} is already set.")
-    else:
-        should_set = False if yes else _prompt_yes_no(f"Set {api_key_env} for current session now?", default_yes=False)
-        if should_set:
-            key = input("Paste API key:\n> ").strip()
-            if key:
-                os.environ[api_key_env] = key
-                print(f"{api_key_env} is set for current process.")
 
     should_update_gitignore = True if yes else _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True)
     if should_update_gitignore:
@@ -964,6 +990,11 @@ def setup(
     print("")
     print("State dir:")
     print(project_root / ".nightrunner")
+
+    auth = check_auth(project_root)
+    if not auth["ok"]:
+        print("")
+        print("No API key found. Run `nightrunner auth login` before `nightrunner run`.")
 
     should_run_baseline = run_baseline_now or (False if yes and not run_baseline_now else _prompt_yes_no("Run baseline now?", default_yes=True))
     if should_run_baseline:
@@ -1099,7 +1130,10 @@ def tail(project_root: Path, exp: str | None = None, lines: int = 80, follow: bo
 def apply_experiment(project_root: Path, exp_id: str) -> Path:
     """Apply selected experiment patch to main worktree after guard checks."""
     ensure_git_repo(project_root)
-    ensure_clean_worktree(project_root)
+    try:
+        ensure_clean_worktree(project_root)
+    except RuntimeError as exc:
+        raise RuntimeError(f"Cannot apply experiment while your project has uncommitted changes.\n{exc}") from exc
     config = load_config(project_root)
 
     patch_path = project_root / ".nightrunner" / "runs" / exp_id / "patch.diff"
@@ -1117,21 +1151,29 @@ def apply_experiment(project_root: Path, exp_id: str) -> Path:
     )
     if not guard_result["ok"]:
         raise RuntimeError(f"Patch guard failed: {json.dumps(guard_result, ensure_ascii=False)}")
-
-    # Validate patch can apply cleanly before actual apply.
-    run_git(["apply", "--check", str(patch_path)], project_root)
-    apply_patch_to_project(project_root, patch_path)
+    try:
+        apply_patch_to_project(project_root, patch_path)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Failed to apply patch for {exp_id}.\n"
+            "Please inspect the patch and current project state before retrying.\n"
+            f"Patch: {patch_path}\n"
+            f"Details: {exc}"
+        ) from exc
     return patch_path
 
 
-def clean(project_root: Path) -> dict[str, Any]:
-    """Cleanup temporary worktrees only."""
+def clean(project_root: Path, branches: bool = False) -> dict[str, Any]:
+    """Cleanup temporary worktrees and optionally leftover temporary branches."""
     ensure_git_repo(project_root)
-    worktrees_root = project_root / ".nightrunner" / "worktrees"
+    worktrees_root = get_worktrees_root(project_root)
     removed = 0
     failed: list[str] = []
+    removed_branches: list[str] = []
     if not worktrees_root.exists():
-        return {"removed": 0, "failed": []}
+        if branches:
+            removed_branches = clean_temporary_branches(project_root)
+        return {"removed": 0, "failed": [], "removed_branches": removed_branches}
 
     for child in worktrees_root.iterdir():
         if not child.is_dir():
@@ -1141,11 +1183,13 @@ def clean(project_root: Path) -> dict[str, Any]:
             removed += 1
         except Exception:
             failed.append(child.name)
-    return {"removed": removed, "failed": failed}
+    if branches:
+        removed_branches = clean_temporary_branches(project_root)
+    return {"removed": removed, "failed": failed, "removed_branches": removed_branches}
 
 
 def check_auth(project_root: Path | None = None) -> dict[str, Any]:
-    """Check API key env var without printing secret value."""
+    """Check API key from environment first, then user config."""
     env_name = "DEEPSEEK_API_KEY"
     if project_root is not None:
         try:
@@ -1153,12 +1197,25 @@ def check_auth(project_root: Path | None = None) -> dict[str, Any]:
             env_name = str(cfg.get("agent", {}).get("api_key_env", env_name))
         except Exception:
             pass
-    exists = bool(os.environ.get(env_name))
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return {
+            "ok": True,
+            "source": "environment",
+            "message": f"{env_name} is set in environment ({mask_api_key(env_value)}).",
+            "masked_key": mask_api_key(env_value),
+        }
+    stored_key = load_api_key("deepseek")
+    if stored_key:
+        return {
+            "ok": True,
+            "source": "user_config",
+            "message": f"DeepSeek API key is configured in user config ({mask_api_key(stored_key)}).",
+            "masked_key": mask_api_key(stored_key),
+        }
     return {
-        "ok": exists,
-        "message": (
-            f"{env_name} is set."
-            if exists
-            else f"{env_name} is not set. Please configure it in your environment variables."
-        ),
+        "ok": False,
+        "source": None,
+        "message": f"No API key found. Run `nightrunner auth login` or set {env_name}.",
+        "masked_key": None,
     }

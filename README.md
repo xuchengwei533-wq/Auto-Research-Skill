@@ -6,21 +6,27 @@ It is installed as a CLI tool and runs inside your own Git project.
 
 ## Quick Start
 
-Windows PowerShell:
+Recommended installation with `uv`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.ps1 | iex"
+uv tool install --force "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
 ```
 
-macOS/Linux:
+Fallback installation with `pip`:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.sh | bash
+```powershell
+python -m pip install --user --upgrade "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
 ```
 
-The installer scripts are also included in this repository as `install.ps1` and `install.sh`.
+NightRunner is a CLI tool. Install it globally with `uv tool install` when possible instead of putting it inside your machine learning project's virtual environment.
 
-Then in your ML project:
+Configure your API key once:
+
+```powershell
+nightrunner auth login
+```
+
+Then switch to your own machine learning project and run NightRunner there, not inside this `Auto-Research-Skill` tool repository:
 
 ```powershell
 cd D:\MyDeepLearningProject
@@ -34,18 +40,19 @@ notepad nightrunner_summary.md
 Recommended with `uv`:
 
 ```powershell
-uv tool install "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
+uv tool install --force "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
 ```
 
 Compatible with `pip`:
 
 ```powershell
-python -m pip install "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
+python -m pip install --user --upgrade "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
 ```
 
 `uv tool install` is the recommended way to install an isolated CLI tool. `pip` is the compatibility option.
 NightRunner itself is lightweight and does not install training dependencies such as `torch`, `tensorflow`, `numpy`, or `pandas`.
 Your training project's dependencies stay in your own project environment.
+If `nightrunner` is not found on Windows after a `uv` install, run `uv tool update-shell` or restart your terminal.
 
 ## Advanced Usage
 
@@ -75,6 +82,12 @@ Core commands:
 - `nightrunner clean`
 - `nightrunner auth`
 
+Authentication commands:
+
+- `nightrunner auth login`
+- `nightrunner auth status`
+- `nightrunner auth logout`
+
 All project-related commands support `--project <path>` and default to `Path.cwd()`.
 
 ## Why Git Is Required
@@ -87,14 +100,53 @@ NightRunner requires Git because:
 - It checks `git status` to avoid modifying dirty workspaces.
 - It keeps AI edits isolated from your main workspace until you explicitly apply them.
 
+If your ML project is not a Git repository yet, initialize it first:
+
+```powershell
+git init
+git add .
+git commit -m "Initial commit"
+```
+
 ## Safety Model
 
-- AI edits are applied only inside `.nightrunner/worktrees/`.
+- AI edits are applied only inside isolated Git worktrees stored in the user cache directory.
 - Main workspace changes only after `nightrunner apply exp_xxxx`.
-- API key is read from environment variables only.
+- API key can be stored with `nightrunner auth login` or provided through `DEEPSEEK_API_KEY`.
+- API key is not written into the project directory or `nightrunner.yaml`.
 - Training dependencies belong to the user project, not NightRunner.
-- `.nightrunner/` stores local experiment state.
+- `.nightrunner/` stores lightweight local state, reports, and patch metadata.
 - `nightrunner_summary.md` is written to your project root.
+
+Worktree locations:
+
+- Windows: `%LOCALAPPDATA%/nightrunner/worktrees/<project_hash>/exp_xxxx`
+- macOS/Linux: `~/.cache/nightrunner/worktrees/<project_hash>/exp_xxxx`
+
+## API Key Configuration
+
+For normal interactive use:
+
+```powershell
+nightrunner auth login
+nightrunner auth status
+```
+
+For CI or temporary shells, prefer an environment variable:
+
+```powershell
+$env:DEEPSEEK_API_KEY="your-key"
+```
+
+NightRunner checks credentials in this order:
+
+1. Environment variable from `agent.api_key_env`
+2. User config stored by `nightrunner auth login`
+
+User auth config location:
+
+- Windows: `%APPDATA%/nightrunner/config.json`
+- macOS/Linux: `~/.config/nightrunner/config.json`
 
 ## Terminal UI / Monitoring
 

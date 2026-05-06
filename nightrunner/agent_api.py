@@ -7,6 +7,35 @@ import time
 from time import perf_counter
 from typing import Callable
 
+from .auth_store import load_api_key, load_auth_config
+
+
+def resolve_api_settings(
+    api_key_env: str = "DEEPSEEK_API_KEY",
+    provider: str = "deepseek",
+    base_url: str = "https://api.deepseek.com",
+) -> tuple[str, str]:
+    """Resolve API key and base URL from environment first, then user config."""
+    env_api_key = os.environ.get(api_key_env)
+    if env_api_key:
+        return env_api_key, base_url
+
+    stored_api_key = load_api_key(provider)
+    if stored_api_key:
+        auth_cfg = load_auth_config()
+        provider_cfg = auth_cfg.get("providers", {}).get(provider, {})
+        stored_base_url = (
+            provider_cfg.get("base_url")
+            if isinstance(provider_cfg, dict)
+            else None
+        )
+        return stored_api_key, str(stored_base_url or base_url)
+
+    raise RuntimeError(
+        f"{api_key_env} is not set and no saved {provider} API key was found. "
+        "Run `nightrunner auth login` or set the environment variable."
+    )
+
 
 def request_patch(
     system_prompt: str,
@@ -23,13 +52,13 @@ def request_patch(
     """Request one experiment proposal from DeepSeek API."""
     from openai import OpenAI
 
-    api_key = os.environ.get(api_key_env)
-    if not api_key:
-        raise RuntimeError(
-            f"{api_key_env} is not set. Please configure it in environment variables."
-        )
+    api_key, resolved_base_url = resolve_api_settings(
+        api_key_env=api_key_env,
+        provider="deepseek",
+        base_url=base_url,
+    )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=resolved_base_url)
     extra_body = {"thinking": {"type": "enabled"}} if thinking_enabled else None
     retry_delays = [0, 5, 15, 30]
     last_exc: Exception | None = None

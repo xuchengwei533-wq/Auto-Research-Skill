@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
 
+from .auth_store import delete_api_key, get_config_path as get_auth_config_path, save_api_key
 from .config import load_config
 from .report import generate_summary_report
 from .runner import (
@@ -101,8 +103,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_clean = sub.add_parser("clean", help="Remove temporary NightRunner worktrees.")
     p_clean.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_clean.add_argument(
+        "--branches",
+        action="store_true",
+        help="Also delete leftover nightrunner/* branches after removing worktrees.",
+    )
     p_auth = sub.add_parser("auth", help="Check API key environment variable.")
     p_auth.add_argument("--project", type=str, default=None, help="Optional project path.")
+    auth_sub = p_auth.add_subparsers(dest="auth_command")
+    auth_sub.add_parser("login", help="Save DeepSeek API key to user config.")
+    auth_sub.add_parser("status", help="Show API key status without printing the full key.")
+    auth_sub.add_parser("logout", help="Delete saved DeepSeek API key from user config.")
 
     p_status = sub.add_parser("status", help="Show current run status and recent experiments.")
     p_status.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
@@ -230,13 +241,30 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "clean":
-            result = clean(project_root)
+            result = clean(project_root, branches=bool(args.branches))
             print(f"Worktrees removed: {result['removed']}")
             if result["failed"]:
                 print("Failed to remove:", ", ".join(result["failed"]))
+            if result.get("removed_branches"):
+                print("Branches removed:", ", ".join(result["removed_branches"]))
             return 0
 
         if args.command == "auth":
+            auth_command = getattr(args, "auth_command", None) or "status"
+            if auth_command == "login":
+                api_key = getpass.getpass("Paste DeepSeek API key: ").strip()
+                if not api_key:
+                    raise RuntimeError("No API key entered.")
+                save_api_key("deepseek", api_key, base_url="https://api.deepseek.com")
+                print(f"DeepSeek API key saved to {get_auth_config_path()}")
+                return 0
+            if auth_command == "logout":
+                deleted = delete_api_key("deepseek")
+                if deleted:
+                    print("DeepSeek API key removed from user config.")
+                else:
+                    print("No saved DeepSeek API key found.")
+                return 0
             try:
                 load_config(project_root)
                 result = check_auth(project_root)
