@@ -82,6 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_setup.add_argument("--train-command", type=str, default=None, help="Training command.")
     p_setup.add_argument("--metric", type=str, default=None, help="Primary metric name.")
+    p_setup.add_argument(
+        "--metric-regex",
+        type=str,
+        default=None,
+        help="Regex used to extract the primary metric from training logs.",
+    )
     p_setup.add_argument("--api-key-env", type=str, default=None, help="API key environment variable name.")
     p_setup.add_argument("--base-url", type=str, default=None, help="OpenAI-compatible API base URL.")
     p_setup.add_argument("--model", type=str, default=None, help="Model name, e.g. deepseek-v4-pro.")
@@ -222,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
                 editable_files=list(args.editable) if args.editable else None,
                 train_command=args.train_command,
                 metric_name=args.metric,
+                metric_regex=args.metric_regex,
                 lower_is_better=lower_is_better,
                 api_key_env=args.api_key_env,
                 base_url=args.base_url,

@@ -104,27 +104,29 @@ def _prompt_yes_no(prompt: str, default_yes: bool = True) -> bool:
     return default_yes
 
 
-def _is_nested_git_repo_dir(project_root: Path, path: Path) -> bool:
-    if path == project_root:
-        return False
+def _has_git_repo_marker(path: Path) -> bool:
     marker = path / ".git"
     return marker.is_file() or marker.is_dir()
 
 
-def _is_inside_nested_git_repo(project_root: Path, relative_path: str) -> bool:
-    candidate = (project_root / relative_path).resolve()
-    try:
-        candidate.relative_to(project_root.resolve())
-    except ValueError:
+def _is_nested_git_repo_dir(project_root: Path, path: Path) -> bool:
+    if path == project_root:
         return False
-    current = candidate if candidate.is_dir() else candidate.parent
-    while current != project_root:
+    return _has_git_repo_marker(path)
+
+
+def _is_inside_nested_git_repo(project_root: Path, relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    current = project_root
+    parts = [part for part in Path(normalized).parts if part not in {"", "."}]
+    if not parts:
+        return False
+    for part in parts[:-1]:
+        current = current / part
         if _is_nested_git_repo_dir(project_root, current):
             return True
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
     return False
 
 
@@ -152,14 +154,18 @@ def _scan_python_files(project_root: Path) -> list[str]:
     all_files: list[str] = []
     for current_root, dirnames, filenames in os.walk(project_root):
         current_path = Path(current_root)
-        if _is_nested_git_repo_dir(project_root, current_path):
+        if current_path != project_root and _has_git_repo_marker(current_path):
             dirnames[:] = []
             continue
-        dirnames[:] = [
-            name
-            for name in dirnames
-            if name not in ignore_dirs and not _is_nested_git_repo_dir(project_root, current_path / name)
-        ]
+        kept_dirnames: list[str] = []
+        for name in dirnames:
+            if name in ignore_dirs:
+                continue
+            child = current_path / name
+            if _has_git_repo_marker(child):
+                continue
+            kept_dirnames.append(name)
+        dirnames[:] = kept_dirnames
         for filename in filenames:
             if not filename.endswith(".py"):
                 continue
@@ -971,6 +977,7 @@ def setup(
     editable_files: list[str] | None = None,
     train_command: str | None = None,
     metric_name: str | None = None,
+    metric_regex: str | None = None,
     lower_is_better: bool | None = None,
     api_key_env: str | None = None,
     base_url: str | None = None,
@@ -1036,13 +1043,15 @@ def setup(
     if lower_is_better is None:
         lower_is_better = True if yes else _prompt_yes_no("Is lower better for this metric?", default_yes=True)
 
-    metric_regex = ""
-    if not yes:
+    metric_regex_value = metric_regex
+    if metric_regex_value is None and yes:
+        metric_regex_value = ""
+    elif metric_regex_value is None:
         print("")
         print("Optional metric regex.")
         print("Leave empty to parse formats like \"val_loss: 0.123\".")
         print("Example: Average loss:\\s*([0-9.]+)")
-        metric_regex = input("\nMetric regex:\n> ").strip()
+        metric_regex_value = input("\nMetric regex:\n> ").strip()
 
     if api_key_env is None:
         api_key_env = "DEEPSEEK_API_KEY"
@@ -1067,8 +1076,8 @@ def setup(
         cfg.setdefault("agent", {})["base_url"] = base_url
     if model:
         cfg.setdefault("agent", {})["model"] = model
-    if metric_regex:
-        cfg.setdefault("metric", {})["regex"] = metric_regex
+    if metric_regex_value:
+        cfg.setdefault("metric", {})["regex"] = metric_regex_value
     else:
         cfg.setdefault("metric", {}).pop("regex", None)
     from .config import save_config

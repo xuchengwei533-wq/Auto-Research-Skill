@@ -50,6 +50,29 @@ def test_scan_python_files_skips_submodule_and_keeps_normal_files(tmp_path: Path
     assert "examples/mnist/main.py" in files
 
 
+def test_scan_python_files_skips_nested_git_repo(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    (nested / ".git").mkdir(parents=True)
+    (nested / "main.py").write_text("print('nested')\n", encoding="utf-8")
+
+    normal = tmp_path / "examples" / "mnist"
+    normal.mkdir(parents=True)
+    (normal / "main.py").write_text("print('normal')\n", encoding="utf-8")
+
+    files = runner._scan_python_files(tmp_path)
+
+    assert "nested/main.py" not in files
+    assert "examples/mnist/main.py" in files
+
+
+def test_validate_editable_paths_allows_normal_file(tmp_path: Path) -> None:
+    normal = tmp_path / "examples" / "mnist"
+    normal.mkdir(parents=True)
+    (normal / "main.py").write_text("print('normal')\n", encoding="utf-8")
+
+    runner._validate_editable_paths(tmp_path, ["examples/mnist/main.py"])
+
+
 def test_setup_rejects_manual_editable_inside_submodule(monkeypatch, tmp_path: Path) -> None:
     submodule = tmp_path / "submodule"
     submodule.mkdir()
@@ -79,3 +102,14 @@ def test_setup_rejects_manual_editable_inside_submodule(monkeypatch, tmp_path: P
         "This file is inside a Git submodule or nested Git repository. "
         "Run NightRunner inside that repository instead."
     ) in str(excinfo.value)
+
+
+def test_validate_editable_paths_rejects_nested_git_repo(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    (nested / ".git").mkdir(parents=True)
+    (nested / "main.py").write_text("print('nested')\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        runner._validate_editable_paths(tmp_path, ["nested/main.py"])
+
+    assert "inside a Git submodule or nested Git repository" in str(excinfo.value)
