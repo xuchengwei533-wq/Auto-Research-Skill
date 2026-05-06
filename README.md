@@ -24,6 +24,8 @@ Then:
 nightrunner auth login
 cd D:\MyDeepLearningProject
 nightrunner setup
+git add nightrunner.yaml .gitignore
+git commit -m "Configure NightRunner"
 nightrunner run --rounds 8
 ```
 

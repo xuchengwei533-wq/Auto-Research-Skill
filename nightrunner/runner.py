@@ -217,6 +217,67 @@ def _fmt_seconds(value: float | int | None) -> str:
     return f"{float(value):.1f}s"
 
 
+def _git_status_paths(project_root: Path) -> list[str]:
+    """Return dirty paths from git status --porcelain."""
+    try:
+        out = run_git(["status", "--porcelain"], project_root)
+    except Exception:
+        return []
+    paths: list[str] = []
+    for raw_line in out.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        path_part = line[3:] if len(line) > 3 else line
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1]
+        normalized = path_part.strip().replace("\\", "/")
+        if normalized:
+            paths.append(normalized)
+    return paths
+
+
+def _format_setup_commit_hint(project_root: Path) -> str:
+    gitignore_path = project_root / ".gitignore"
+    add_targets = ["nightrunner.yaml"]
+    if gitignore_path.exists():
+        add_targets.append(".gitignore")
+    add_line = " ".join(add_targets)
+    return (
+        "NightRunner setup completed.\n"
+        "Before running baseline, commit the generated config:\n\n"
+        f"  git add {add_line}\n"
+        "  git commit -m \"Configure NightRunner\"\n\n"
+        "Then run:\n\n"
+        "  nightrunner baseline\n"
+        "  nightrunner run --rounds 8"
+    )
+
+
+def _raise_setup_dirty_baseline_error(project_root: Path, dirty_paths: list[str]) -> None:
+    normalized = {path.replace("\\", "/") for path in dirty_paths}
+    setup_related = {
+        path
+        for path in normalized
+        if path == "nightrunner.yaml" or path == ".gitignore" or path.startswith(".nightrunner/")
+    }
+    if setup_related:
+        gitignore_path = project_root / ".gitignore"
+        add_targets = ["nightrunner.yaml"]
+        if gitignore_path.exists():
+            add_targets.append(".gitignore")
+        add_line = " ".join(add_targets)
+        raise RuntimeError(
+            "NightRunner setup created or modified project config files.\n"
+            "Commit them first:\n\n"
+            f"  git add {add_line}\n"
+            "  git commit -m \"Configure NightRunner\"\n\n"
+            "Then run:\n\n"
+            "  nightrunner baseline"
+        )
+    ensure_clean_worktree(project_root)
+
+
 def _short(text: str, limit: int = 60) -> str:
     if len(text) <= limit:
         return text
@@ -990,14 +1051,24 @@ def setup(
     print("")
     print("State dir:")
     print(project_root / ".nightrunner")
+    print("")
+    print(_format_setup_commit_hint(project_root))
 
     auth = check_auth(project_root)
     if not auth["ok"]:
         print("")
         print("No API key found. Run `nightrunner auth login` before `nightrunner run`.")
 
-    should_run_baseline = run_baseline_now or (False if yes and not run_baseline_now else _prompt_yes_no("Run baseline now?", default_yes=True))
+    should_run_baseline = bool(run_baseline_now)
+    if not should_run_baseline and not yes:
+        print("")
+        print("Commit the generated NightRunner config, then run `nightrunner baseline`.")
+        should_run_baseline = _prompt_yes_no("Run baseline now?", default_yes=False)
     if should_run_baseline:
+        if cfg.get("safety", {}).get("require_clean_git", True):
+            dirty_paths = _git_status_paths(project_root)
+            if dirty_paths:
+                _raise_setup_dirty_baseline_error(project_root, dirty_paths)
         run_baseline(project_root)
     return init_result
 
