@@ -10,6 +10,11 @@ Recommended installation with `uv`:
 
 ```powershell
 uv tool install --force "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
+nightrunner auth login
+cd D:\MyDeepLearningProject
+nightrunner setup
+nightrunner run --rounds 8
+notepad nightrunner_summary.md
 ```
 
 Fallback installation with `pip`:
@@ -19,21 +24,7 @@ python -m pip install --user --upgrade "git+https://github.com/xuchengwei533-wq/
 ```
 
 NightRunner is a CLI tool. Install it globally with `uv tool install` when possible instead of putting it inside your machine learning project's virtual environment.
-
-Configure your API key once:
-
-```powershell
-nightrunner auth login
-```
-
-Then switch to your own machine learning project and run NightRunner there, not inside this `Auto-Research-Skill` tool repository:
-
-```powershell
-cd D:\MyDeepLearningProject
-nightrunner setup
-nightrunner run --rounds 8
-notepad nightrunner_summary.md
-```
+After installation, run NightRunner inside your own machine learning project, not inside this `Auto-Research-Skill` tool repository.
 
 ## Manual Install
 

@@ -108,7 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also delete leftover nightrunner/* branches after removing worktrees.",
     )
-    p_auth = sub.add_parser("auth", help="Check API key environment variable.")
+    p_auth = sub.add_parser("auth", help="Manage DeepSeek API key for NightRunner.")
     p_auth.add_argument("--project", type=str, default=None, help="Optional project path.")
     auth_sub = p_auth.add_subparsers(dest="auth_command")
     auth_sub.add_parser("login", help="Save DeepSeek API key to user config.")

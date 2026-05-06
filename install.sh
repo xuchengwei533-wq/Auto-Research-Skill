@@ -52,6 +52,7 @@ fi
 
 step "Installed successfully"
 printf 'Next steps:\n'
+printf '  %s auth login\n' "$RUNNER_CMD"
 printf '  cd /path/to/your/ml/project\n'
 printf '  %s setup\n' "$RUNNER_CMD"
 printf '  %s run --rounds 8\n' "$RUNNER_CMD"

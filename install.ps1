@@ -96,6 +96,7 @@ if ($RunRounds -gt 0) {
 
 Write-Step "Done"
 Write-Host "Next steps:" -ForegroundColor Green
+Write-Host "nightrunner auth login"
 if ($Project) {
     Write-Host "cd `"$Project`""
 } else {

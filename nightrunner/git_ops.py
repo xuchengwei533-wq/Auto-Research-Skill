@@ -183,6 +183,7 @@ def save_diff(worktree_path: Path, output_path: Path) -> None:
 def apply_patch_to_project(project_root: Path, patch_path: Path) -> None:
     if not patch_path.exists():
         raise FileNotFoundError(f"Patch file not found: {patch_path}")
+    ensure_clean_worktree(project_root)
     try:
         run_git(["apply", "--check", str(patch_path)], project_root)
         run_git(["apply", str(patch_path)], project_root)
