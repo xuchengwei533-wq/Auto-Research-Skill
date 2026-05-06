@@ -104,6 +104,40 @@ def _prompt_yes_no(prompt: str, default_yes: bool = True) -> bool:
     return default_yes
 
 
+def _is_nested_git_repo_dir(project_root: Path, path: Path) -> bool:
+    if path == project_root:
+        return False
+    marker = path / ".git"
+    return marker.is_file() or marker.is_dir()
+
+
+def _is_inside_nested_git_repo(project_root: Path, relative_path: str) -> bool:
+    candidate = (project_root / relative_path).resolve()
+    try:
+        candidate.relative_to(project_root.resolve())
+    except ValueError:
+        return False
+    current = candidate if candidate.is_dir() else candidate.parent
+    while current != project_root:
+        if _is_nested_git_repo_dir(project_root, current):
+            return True
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
+
+
+def _validate_editable_paths(project_root: Path, editable_files: list[str]) -> None:
+    for path in editable_files:
+        normalized = path.replace("\\", "/").rstrip("/")
+        if _is_inside_nested_git_repo(project_root, normalized):
+            raise RuntimeError(
+                "This file is inside a Git submodule or nested Git repository. "
+                "Run NightRunner inside that repository instead."
+            )
+
+
 def _scan_python_files(project_root: Path) -> list[str]:
     ignore_dirs = {
         ".venv",
@@ -116,11 +150,24 @@ def _scan_python_files(project_root: Path) -> list[str]:
         "dist",
     }
     all_files: list[str] = []
-    for p in project_root.rglob("*.py"):
-        rel = p.relative_to(project_root)
-        if any(part in ignore_dirs for part in rel.parts):
+    for current_root, dirnames, filenames in os.walk(project_root):
+        current_path = Path(current_root)
+        if _is_nested_git_repo_dir(project_root, current_path):
+            dirnames[:] = []
             continue
-        all_files.append(rel.as_posix())
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name not in ignore_dirs and not _is_nested_git_repo_dir(project_root, current_path / name)
+        ]
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            file_path = current_path / filename
+            rel = file_path.relative_to(project_root)
+            if any(part in ignore_dirs for part in rel.parts):
+                continue
+            all_files.append(rel.as_posix())
 
     def _priority(path: str) -> tuple[int, str]:
         if path == "train.py":
@@ -968,6 +1015,7 @@ def setup(
             print("Select editable files for AI experiments, separated by commas:")
             selection = input("> ")
             selected_editable = _parse_editable_selection(selection, candidates)
+    _validate_editable_paths(project_root, selected_editable or [])
 
     default_train = _detect_train_command_default(candidates)
     if train_command is None:
