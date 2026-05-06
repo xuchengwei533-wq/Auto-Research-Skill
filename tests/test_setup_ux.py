@@ -20,6 +20,8 @@ def _fake_init_project(project_root: Path, editable_files=None, train_command="p
             lower_is_better=lower_is_better,
         ),
     )
+    if update_gitignore:
+        runner._update_gitignore(project_root)
     return {
         "project_root": str(project_root),
         "config": str(project_root / "nightrunner.yaml"),

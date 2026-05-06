@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import traceback
 from pathlib import Path
 from time import perf_counter, sleep
 from typing import Any
 
-from . import __version__
 from .agent_api import request_patch
 from .auth_store import load_api_key, mask_api_key
 from .console_ui import RunUI
-from .config import NIGHTRUNNER_GITIGNORE_LINES, load_config, write_default_config_if_missing
+from .config import load_config
 from .diff_analyzer import analyze_diff
 from .git_ops import (
     GitError,
@@ -42,66 +40,45 @@ from .patch_handler import (
     parse_model_response,
 )
 from .prompt_builder import build_system_prompt, build_user_prompt
+from .project_context import build_project_context, ensure_project_layout
 from .report import generate_experiment_report, generate_summary_report
+from .setup_flow import (
+    SetupOptions,
+    init_project as setup_init_project,
+    is_git_available as setup_is_git_available,
+    prompt_yes_no as setup_prompt_yes_no,
+    run_setup as run_setup_flow,
+    scan_python_files as setup_scan_python_files,
+    update_gitignore as setup_update_gitignore,
+    validate_editable_paths as setup_validate_editable_paths,
+)
 from .state_store import append_experiment, load_best, load_experiments, next_experiment_id, save_best
 from .train_runner import run_training
 from .utils import ensure_dir, now_iso, write_json, write_text
 
 
 def _nightrunner_dir(project_root: Path) -> Path:
-    return project_root / ".nightrunner"
+    return build_project_context(project_root).nightrunner_dir
 
 
 def _state_dir(project_root: Path) -> Path:
-    return _nightrunner_dir(project_root) / "state"
+    return build_project_context(project_root).state_dir
 
 
 def _ensure_layout(project_root: Path) -> None:
-    base = _nightrunner_dir(project_root)
-    ensure_dir(base / "state")
-    ensure_dir(base / "runs")
-    ensure_dir(base / "cache")
-    ensure_dir(base / "tmp")
-    ensure_dir(get_worktrees_root(project_root))
+    ensure_project_layout(build_project_context(project_root))
 
 
 def _update_gitignore(project_root: Path) -> None:
-    path = project_root / ".gitignore"
-    current = path.read_text(encoding="utf-8") if path.exists() else ""
-    lines = current.splitlines()
-    existing = set(lines)
-    to_add = [line for line in NIGHTRUNNER_GITIGNORE_LINES if line not in existing]
-    if to_add:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.extend(to_add)
-        write_text(path, "\n".join(lines) + "\n")
+    setup_update_gitignore(project_root)
 
 
 def _is_git_available() -> bool:
-    try:
-        result = subprocess.run(
-            ["git", "--version"],
-            text=True,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return result.returncode == 0
-    except OSError:
-        return False
+    return setup_is_git_available()
 
 
 def _prompt_yes_no(prompt: str, default_yes: bool = True) -> bool:
-    suffix = "[Y/n]" if default_yes else "[y/N]"
-    raw = input(f"{prompt} {suffix}\n> ").strip().lower()
-    if not raw:
-        return default_yes
-    if raw in {"y", "yes"}:
-        return True
-    if raw in {"n", "no"}:
-        return False
-    return default_yes
+    return setup_prompt_yes_no(prompt, default_yes=default_yes)
 
 
 def _has_git_repo_marker(path: Path) -> bool:
@@ -131,64 +108,11 @@ def _is_inside_nested_git_repo(project_root: Path, relative_path: str) -> bool:
 
 
 def _validate_editable_paths(project_root: Path, editable_files: list[str]) -> None:
-    for path in editable_files:
-        normalized = path.replace("\\", "/").rstrip("/")
-        if _is_inside_nested_git_repo(project_root, normalized):
-            raise RuntimeError(
-                "This file is inside a Git submodule or nested Git repository. "
-                "Run NightRunner inside that repository instead."
-            )
+    setup_validate_editable_paths(project_root, editable_files)
 
 
 def _scan_python_files(project_root: Path) -> list[str]:
-    ignore_dirs = {
-        ".venv",
-        "venv",
-        ".git",
-        ".nightrunner",
-        "__pycache__",
-        "site-packages",
-        "build",
-        "dist",
-    }
-    all_files: list[str] = []
-    for current_root, dirnames, filenames in os.walk(project_root):
-        current_path = Path(current_root)
-        if current_path != project_root and _has_git_repo_marker(current_path):
-            dirnames[:] = []
-            continue
-        kept_dirnames: list[str] = []
-        for name in dirnames:
-            if name in ignore_dirs:
-                continue
-            child = current_path / name
-            if _has_git_repo_marker(child):
-                continue
-            kept_dirnames.append(name)
-        dirnames[:] = kept_dirnames
-        for filename in filenames:
-            if not filename.endswith(".py"):
-                continue
-            file_path = current_path / filename
-            rel = file_path.relative_to(project_root)
-            if any(part in ignore_dirs for part in rel.parts):
-                continue
-            all_files.append(rel.as_posix())
-
-    def _priority(path: str) -> tuple[int, str]:
-        if path == "train.py":
-            return (0, path)
-        if path == "main.py":
-            return (1, path)
-        if path == "model.py":
-            return (2, path)
-        if path.startswith("src/"):
-            return (3, path)
-        if "/" not in path:
-            return (4, path)
-        return (5, path)
-
-    return sorted(all_files, key=_priority)
+    return setup_scan_python_files(project_root)
 
 
 def _parse_editable_selection(raw: str, candidates: list[str]) -> list[str]:
@@ -425,47 +349,14 @@ def init_project(
     update_gitignore: bool = True,
 ) -> dict[str, Any]:
     """Initialize NightRunner runtime files in a git project."""
-    if not is_git_repo(project_root):
-        raise RuntimeError(
-            "NightRunner requires a Git repository for safe worktree isolation.\n"
-            "Please run:\n"
-            "git init\n"
-            "git add .\n"
-            "git commit -m \"Initial commit\""
-        )
-    _ensure_layout(project_root)
-    cfg_path = write_default_config_if_missing(
-        project_root,
+    return setup_init_project(
+        project_root=project_root,
         editable_files=editable_files,
         train_command=train_command,
         metric_name=metric_name,
         lower_is_better=lower_is_better,
+        update_gitignore_enabled=update_gitignore,
     )
-
-    state = _state_dir(project_root)
-    best_path = state / "best.json"
-    if not best_path.exists():
-        write_json(best_path, {})
-    exp_path = state / "experiments.jsonl"
-    if not exp_path.exists():
-        write_text(exp_path, "")
-    project_meta = state / "project.json"
-    if not project_meta.exists():
-        write_json(
-            project_meta,
-            {
-                "project_root": str(project_root.resolve()),
-                "created_at": now_iso(),
-                "nightrunner_version": __version__,
-            },
-        )
-    if update_gitignore:
-        _update_gitignore(project_root)
-    return {
-        "project_root": str(project_root.resolve()),
-        "config": str(cfg_path),
-        "nightrunner_dir": str(_nightrunner_dir(project_root)),
-    }
 
 
 def _require_best_baseline(project_root: Path) -> dict[str, Any]:
@@ -1007,82 +898,22 @@ def setup(
             if "nothing to commit" not in str(exc).lower():
                 raise
 
-    candidates = _scan_python_files(project_root)
-    selected_editable = editable_files
-    if selected_editable is None:
-        print("")
-        print("Detected Python files:")
-        for idx, path in enumerate(candidates, start=1):
-            print(f"[{idx}] {path}")
-        print("")
-        if yes:
-            selected_editable = [candidates[0]] if candidates else ["train.py"]
-            print(f"Editable files [auto]: {', '.join(selected_editable)}")
-        else:
-            print("Select editable files for AI experiments, separated by commas:")
-            selection = input("> ")
-            selected_editable = _parse_editable_selection(selection, candidates)
-    _validate_editable_paths(project_root, selected_editable or [])
-
-    default_train = _detect_train_command_default(candidates)
-    if train_command is None:
-        if yes:
-            train_command = default_train
-            print(f"Training command [auto]: {train_command}")
-        else:
-            print("")
-            train_command = input(f"Training command [{default_train}]:\n> ").strip() or default_train
-
-    if metric_name is None:
-        if yes:
-            metric_name = "val_loss"
-            print(f"Metric name [auto]: {metric_name}")
-        else:
-            print("")
-            metric_name = input("Metric name [val_loss]:\n> ").strip() or "val_loss"
-    if lower_is_better is None:
-        lower_is_better = True if yes else _prompt_yes_no("Is lower better for this metric?", default_yes=True)
-
-    metric_regex_value = metric_regex
-    if metric_regex_value is None and yes:
-        metric_regex_value = ""
-    elif metric_regex_value is None:
-        print("")
-        print("Optional metric regex.")
-        print("Leave empty to parse formats like \"val_loss: 0.123\".")
-        print("Example: Average loss:\\s*([0-9.]+)")
-        metric_regex_value = input("\nMetric regex:\n> ").strip()
-
-    if api_key_env is None:
-        api_key_env = "DEEPSEEK_API_KEY"
-    if not api_key_env:
-        api_key_env = "DEEPSEEK_API_KEY"
-
-    should_update_gitignore = True if yes else _prompt_yes_no("Add NightRunner runtime artifacts to .gitignore?", default_yes=True)
-    if should_update_gitignore:
-        _update_gitignore(project_root)
-
-    init_result = init_project(
-        project_root=project_root,
-        editable_files=selected_editable,
-        train_command=train_command,
-        metric_name=metric_name,
-        lower_is_better=bool(lower_is_better),
-        update_gitignore=False,
+    setup_result = run_setup_flow(
+        project_root,
+        SetupOptions(
+            editable_files=editable_files,
+            train_command=train_command,
+            metric_name=metric_name,
+            metric_regex=metric_regex,
+            lower_is_better=lower_is_better,
+            api_key_env=api_key_env,
+            base_url=base_url,
+            model=model,
+            run_baseline_now=run_baseline_now,
+            yes=yes,
+        ),
     )
     cfg = load_config(project_root)
-    cfg.setdefault("agent", {})["api_key_env"] = api_key_env
-    if base_url:
-        cfg.setdefault("agent", {})["base_url"] = base_url
-    if model:
-        cfg.setdefault("agent", {})["model"] = model
-    if metric_regex_value:
-        cfg.setdefault("metric", {})["regex"] = metric_regex_value
-    else:
-        cfg.setdefault("metric", {}).pop("regex", None)
-    from .config import save_config
-
-    save_config(project_root, cfg)
 
     print("")
     print("NightRunner setup completed.")
@@ -1091,11 +922,11 @@ def setup(
     print(project_root)
     print("")
     print("Editable files:")
-    for path in selected_editable or []:
+    for path in setup_result.get("editable_files", []):
         print(f"- {path}")
     print("")
     print("Train command:")
-    print(train_command)
+    print(setup_result.get("train_command"))
     print("")
     print("Metric:")
     print(_format_metric(cfg.get("metric", {})))
@@ -1127,7 +958,7 @@ def setup(
             if dirty_paths:
                 _raise_setup_dirty_baseline_error(project_root, dirty_paths)
         run_baseline(project_root)
-    return init_result
+    return setup_result
 
 
 def status(project_root: Path, plain: bool = False) -> None:

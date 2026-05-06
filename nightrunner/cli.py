@@ -3,20 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
-import os
 import sys
 from pathlib import Path
 
-from .auth_store import (
-    delete_api_key,
-    get_config_path as get_auth_config_path,
-    load_api_key,
-    mask_api_key,
-    save_api_key,
-)
-from .config import load_config
+from .auth_cli import handle_auth_command
 from .report import generate_summary_report
 from .runner import (
     apply_experiment,
@@ -139,190 +130,190 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_parser() -> argparse.ArgumentParser:
+    return _build_parser()
+
+
 def _project_root(project_arg: str | None) -> Path:
     if project_arg:
         return Path(project_arg).expanduser().resolve()
     return Path.cwd().resolve()
 
 
-def _auth_status() -> dict[str, str | bool | None]:
-    env_name = "DEEPSEEK_API_KEY"
-    env_value = os.environ.get(env_name)
-    if env_value:
-        return {
-            "ok": True,
-            "message": f"{env_name} is set in environment ({mask_api_key(env_value)}).",
-            "source": "environment",
-            "masked_key": mask_api_key(env_value),
+def _handle_init(args: argparse.Namespace, project_root: Path) -> int:
+    editable_files = list(args.editable) if args.editable else ["train.py"]
+    lower_is_better = not bool(args.higher_is_better)
+    result = init_project(
+        project_root,
+        editable_files=editable_files,
+        train_command=args.train_command,
+        metric_name=args.metric,
+        lower_is_better=lower_is_better,
+    )
+    print("NightRunner initialized.")
+    print(f"Project root: {result['project_root']}")
+    print(f"Config file: {result['config']}")
+    print(f"State dir: {result['nightrunner_dir']}")
+    return 0
+
+
+def _handle_night(args: argparse.Namespace, project_root: Path) -> int:
+    if args.rounds <= 0:
+        raise ValueError("--rounds must be > 0")
+    summary_path = run_night(
+        project_root,
+        rounds=args.rounds,
+        dry_run=bool(args.dry_run),
+        plain=bool(args.plain),
+    )
+    print(f"Night run completed. Summary: {summary_path}")
+    return 0
+
+
+def _handle_run(args: argparse.Namespace, project_root: Path) -> int:
+    if args.rounds <= 0:
+        raise ValueError("--rounds must be > 0")
+    summary_path = run(
+        project_root,
+        rounds=args.rounds,
+        dry_run=bool(args.dry_run),
+        plain=bool(args.plain),
+    )
+    print(f"Run completed. Summary: {summary_path}")
+    return 0
+
+
+def _handle_setup(args: argparse.Namespace, project_root: Path) -> int:
+    lower_is_better = None
+    if bool(args.higher_is_better):
+        lower_is_better = False
+    elif bool(args.lower_is_better):
+        lower_is_better = True
+    result = setup(
+        project_root,
+        editable_files=list(args.editable) if args.editable else None,
+        train_command=args.train_command,
+        metric_name=args.metric,
+        metric_regex=args.metric_regex,
+        lower_is_better=lower_is_better,
+        api_key_env=args.api_key_env,
+        base_url=args.base_url,
+        model=args.model,
+        run_baseline_now=bool(args.run_baseline),
+        yes=bool(args.yes),
+    )
+    print(f"Config file: {Path(result['config']).name}")
+    return 0
+
+
+def _handle_baseline(args: argparse.Namespace, project_root: Path) -> int:
+    report_path = run_baseline(project_root, force=bool(args.force))
+    print(f"Baseline completed. Report: {report_path}")
+    return 0
+
+
+def _handle_report(args: argparse.Namespace, project_root: Path) -> int:
+    summary_path = generate_summary_report(project_root)
+    experiments = load_experiments(project_root)
+    best = load_best(project_root) or {}
+    counts: dict[str, int] = {}
+    for rec in experiments:
+        rec_status = str(rec.get("status", "unknown"))
+        counts[rec_status] = counts.get(rec_status, 0) + 1
+    print(f"Summary generated: {summary_path}")
+    print(f"Total experiments: {len(experiments)}")
+    print(f"keep: {counts.get('keep', 0)}")
+    print(f"discard: {counts.get('discard', 0)}")
+    print(f"crash: {counts.get('crash', 0)}")
+    print(f"violation: {counts.get('violation', 0)}")
+    print(f"Current best experiment: {best.get('experiment_id')}")
+    print(f"Current best metric: {best.get('metric_value')}")
+    print(f"Recommended report path: {summary_path}")
+    if args.json:
+        payload = {
+            "summary_path": str(summary_path),
+            "total_experiments": len(experiments),
+            "counts": counts,
+            "best": best,
         }
-    stored_key = load_api_key("deepseek")
-    if stored_key:
-        return {
-            "ok": True,
-            "message": f"DeepSeek API key is configured in user config ({mask_api_key(stored_key)}).",
-            "source": "user_config",
-            "masked_key": mask_api_key(stored_key),
-        }
-    return {
-        "ok": False,
-        "message": "No API key found. Run `nightrunner auth login` or set DEEPSEEK_API_KEY.",
-        "source": "missing",
-        "masked_key": None,
-    }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _handle_apply(args: argparse.Namespace, project_root: Path) -> int:
+    apply_experiment(project_root, args.exp_id)
+    print("Patch applied. Please review changes:")
+    print("git diff")
+    print("git add .")
+    print(f"git commit -m \"Apply NightRunner experiment {args.exp_id}\"")
+    return 0
+
+
+def _handle_clean(args: argparse.Namespace, project_root: Path) -> int:
+    result = clean(project_root, branches=bool(args.branches))
+    print(f"Worktrees removed: {result['removed']}")
+    print("Failed worktrees:", ", ".join(result["failed"]) if result["failed"] else "(none)")
+    print(
+        "Removed branches:",
+        ", ".join(result.get("removed_branches", [])) if result.get("removed_branches") else "(none)",
+    )
+    print(
+        "Skipped branches:",
+        ", ".join(result.get("skipped_branches", [])) if result.get("skipped_branches") else "(none)",
+    )
+    return 0
+
+
+def _handle_auth(args: argparse.Namespace) -> int:
+    return handle_auth_command(getattr(args, "auth_command", None))
+
+
+def _handle_status(args: argparse.Namespace, project_root: Path) -> int:
+    status(project_root, plain=bool(args.plain))
+    return 0
+
+
+def _handle_tail(args: argparse.Namespace, project_root: Path) -> int:
+    if args.lines <= 0:
+        raise ValueError("--lines must be > 0")
+    tail(project_root, exp=args.exp, lines=int(args.lines), follow=bool(args.follow))
+    return 0
+
+
+def dispatch(args: argparse.Namespace) -> int:
+    project_root = _project_root(getattr(args, "project", None))
+    if args.command == "init":
+        return _handle_init(args, project_root)
+    if args.command == "night":
+        return _handle_night(args, project_root)
+    if args.command == "run":
+        return _handle_run(args, project_root)
+    if args.command == "setup":
+        return _handle_setup(args, project_root)
+    if args.command == "baseline":
+        return _handle_baseline(args, project_root)
+    if args.command == "report":
+        return _handle_report(args, project_root)
+    if args.command == "apply":
+        return _handle_apply(args, project_root)
+    if args.command == "clean":
+        return _handle_clean(args, project_root)
+    if args.command == "auth":
+        return _handle_auth(args)
+    if args.command == "status":
+        return _handle_status(args, project_root)
+    if args.command == "tail":
+        return _handle_tail(args, project_root)
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
+    parser = build_parser()
     args = parser.parse_args(argv)
-    project_root = _project_root(getattr(args, "project", None))
-
     try:
-        if args.command == "init":
-            editable_files = list(args.editable) if args.editable else ["train.py"]
-            lower_is_better = not bool(args.higher_is_better)
-            result = init_project(
-                project_root,
-                editable_files=editable_files,
-                train_command=args.train_command,
-                metric_name=args.metric,
-                lower_is_better=lower_is_better,
-            )
-            print("NightRunner initialized.")
-            print(f"Project root: {result['project_root']}")
-            print(f"Config file: {result['config']}")
-            print(f"State dir: {result['nightrunner_dir']}")
-            return 0
-
-        if args.command == "night":
-            if args.rounds <= 0:
-                raise ValueError("--rounds must be > 0")
-            summary_path = run_night(
-                project_root,
-                rounds=args.rounds,
-                dry_run=bool(args.dry_run),
-                plain=bool(args.plain),
-            )
-            print(f"Night run completed. Summary: {summary_path}")
-            return 0
-
-        if args.command == "run":
-            if args.rounds <= 0:
-                raise ValueError("--rounds must be > 0")
-            summary_path = run(
-                project_root,
-                rounds=args.rounds,
-                dry_run=bool(args.dry_run),
-                plain=bool(args.plain),
-            )
-            print(f"Run completed. Summary: {summary_path}")
-            return 0
-
-        if args.command == "setup":
-            lower_is_better = None
-            if bool(args.higher_is_better):
-                lower_is_better = False
-            elif bool(args.lower_is_better):
-                lower_is_better = True
-            result = setup(
-                project_root,
-                editable_files=list(args.editable) if args.editable else None,
-                train_command=args.train_command,
-                metric_name=args.metric,
-                metric_regex=args.metric_regex,
-                lower_is_better=lower_is_better,
-                api_key_env=args.api_key_env,
-                base_url=args.base_url,
-                model=args.model,
-                run_baseline_now=bool(args.run_baseline),
-                yes=bool(args.yes),
-            )
-            print(f"Config file: {Path(result['config']).name}")
-            return 0
-
-        if args.command == "baseline":
-            report_path = run_baseline(project_root, force=bool(args.force))
-            print(f"Baseline completed. Report: {report_path}")
-            return 0
-
-        if args.command == "report":
-            summary_path = generate_summary_report(project_root)
-            experiments = load_experiments(project_root)
-            best = load_best(project_root) or {}
-            counts: dict[str, int] = {}
-            for rec in experiments:
-                rec_status = str(rec.get("status", "unknown"))
-                counts[rec_status] = counts.get(rec_status, 0) + 1
-            print(f"Summary generated: {summary_path}")
-            print(f"Total experiments: {len(experiments)}")
-            print(f"keep: {counts.get('keep', 0)}")
-            print(f"discard: {counts.get('discard', 0)}")
-            print(f"crash: {counts.get('crash', 0)}")
-            print(f"violation: {counts.get('violation', 0)}")
-            print(f"Current best experiment: {best.get('experiment_id')}")
-            print(f"Current best metric: {best.get('metric_value')}")
-            print(f"Recommended report path: {summary_path}")
-            if args.json:
-                payload = {
-                    "summary_path": str(summary_path),
-                    "total_experiments": len(experiments),
-                    "counts": counts,
-                    "best": best,
-                }
-                print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return 0
-
-        if args.command == "apply":
-            patch_path = apply_experiment(project_root, args.exp_id)
-            print("Patch applied. Please review changes:")
-            print("git diff")
-            print("git add .")
-            print(f"git commit -m \"Apply NightRunner experiment {args.exp_id}\"")
-            return 0
-
-        if args.command == "clean":
-            result = clean(project_root, branches=bool(args.branches))
-            print(f"Worktrees removed: {result['removed']}")
-            print("Failed worktrees:", ", ".join(result["failed"]) if result["failed"] else "(none)")
-            print(
-                "Removed branches:",
-                ", ".join(result.get("removed_branches", [])) if result.get("removed_branches") else "(none)",
-            )
-            print(
-                "Skipped branches:",
-                ", ".join(result.get("skipped_branches", [])) if result.get("skipped_branches") else "(none)",
-            )
-            return 0
-
-        if args.command == "auth":
-            auth_command = getattr(args, "auth_command", None) or "status"
-            if auth_command == "login":
-                api_key = getpass.getpass("Paste DeepSeek API key: ").strip()
-                if not api_key:
-                    raise RuntimeError("No API key entered.")
-                save_api_key("deepseek", api_key, base_url="https://api.deepseek.com")
-                print(f"DeepSeek API key saved to {get_auth_config_path()}")
-                return 0
-            if auth_command == "logout":
-                deleted = delete_api_key("deepseek")
-                if deleted:
-                    print("DeepSeek API key removed from user config.")
-                else:
-                    print("No saved DeepSeek API key found.")
-                return 0
-            result = _auth_status()
-            print(result["message"])
-            return 0 if result["ok"] else 1
-
-        if args.command == "status":
-            status(project_root, plain=bool(args.plain))
-            return 0
-
-        if args.command == "tail":
-            if args.lines <= 0:
-                raise ValueError("--lines must be > 0")
-            tail(project_root, exp=args.exp, lines=int(args.lines), follow=bool(args.follow))
-            return 0
-
+        code = dispatch(args)
+        if code != 1:
+            return code
         parser.print_help()
         return 1
     except Exception as exc:
