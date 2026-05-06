@@ -266,12 +266,13 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
             print("")
             print("Detected Python files:")
             for idx, path in enumerate(candidates, start=1):
-                print(f"{idx:>3}. {path}")
+                print(f"[{idx}] {path}")
             print("")
-            print("Choose editable files (comma-separated indices or paths).")
-            print("Press Enter to use first detected file.")
-            raw = input("\nEditable files:\n> ")
+            print("Select editable files for AI experiments, separated by commas:")
+            raw = input("> ")
             selected_editable = _parse_editable_selection(raw, candidates)
+        if options.yes:
+            print(f"Editable files [auto]: {', '.join(selected_editable)}")
     selected_editable = [x.replace("\\", "/") for x in (selected_editable or ["train.py"])]
     validate_editable_paths(project_root, selected_editable)
 
@@ -279,8 +280,10 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
         train_default = _detect_train_command_default(selected_editable or candidates)
         if options.yes:
             train_command = train_default
+            print(f"Training command [auto]: {train_command}")
         else:
-            train_command = input(f"\nTrain command [{train_default}]:\n> ").strip() or train_default
+            print("")
+            train_command = input(f"Training command [{train_default}]:\n> ").strip() or train_default
     else:
         train_command = options.train_command
 
@@ -288,6 +291,7 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
     if metric_name is None:
         if options.yes:
             metric_name = "val_loss"
+            print(f"Metric name [auto]: {metric_name}")
         else:
             print("")
             metric_name = input("Metric name [val_loss]:\n> ").strip() or "val_loss"
