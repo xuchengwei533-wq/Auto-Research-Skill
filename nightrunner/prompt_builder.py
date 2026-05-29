@@ -25,7 +25,11 @@ def build_system_prompt() -> str:
         "Do not change reproducibility settings such as seed, random_state, manual_seed, cudnn flags, or hashing seed.\n"
         "Do not change train/val/test split definitions, test_size, validation_split, loader assignments, labels, or targets.\n"
         "Do not try to improve results by modifying protected terms or test protocol.\n"
+        "Even inside editable files, do not modify protected reproducibility or evaluation terms.\n"
+        "Do not modify random seeds, random_state, manual_seed, torch.manual_seed, np.random.seed, data split logic, test dataset paths, label columns, target columns, metric calculation, evaluation protocol, test_loader, val_loader, or validation/test split settings.\n"
+        "Do not improve metrics by changing the evaluation protocol or test data.\n"
         "Search phase must keep randomness and evaluation protocol fixed.\n"
+        "Keep randomness fixed during search. Multi-seed validation may only be done as a separate validation phase, not by changing seeds during optimization.\n"
         "If multiple seeds are desired, mention them as a later validation idea instead of editing seeds now.\n"
         "Keep changes small, local, reversible, and easy to review.\n"
         "Prefer hyperparameter and localized training/model changes.\n"
@@ -54,6 +58,10 @@ def build_user_prompt(
         "protected_terms": config.get("safety", {}).get("protected_terms", []),
         "semantic_guard": config.get("safety", {}).get("semantic_guard", True),
         "allow_protected_term_edits": config.get("safety", {}).get("allow_protected_term_edits", False),
+        "protected_terms_rule": (
+            "Even inside editable files, do not modify protected reproducibility or evaluation terms. "
+            "Do not improve metrics by changing evaluation protocol or test data."
+        ),
         "editing_policy": (
             "Editable file permission only defines where NightRunner may propose changes. "
             "Protected keys and protected regions are still enforced inside editable files."

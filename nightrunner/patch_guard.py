@@ -120,7 +120,11 @@ def validate_semantic_changes(
     if not enabled or allow_protected_term_edits:
         return {"ok": True, "violations": []}
 
-    lowered_terms = [str(term).strip().lower() for term in (protected_terms or DEFAULT_PROTECTED_TERMS) if str(term).strip()]
+    lowered_terms = sorted(
+        [str(term).strip().lower() for term in (protected_terms or DEFAULT_PROTECTED_TERMS) if str(term).strip()],
+        key=len,
+        reverse=True,
+    )
     violations: list[dict[str, str]] = []
 
     for changed in [_norm(path) for path in changed_files]:

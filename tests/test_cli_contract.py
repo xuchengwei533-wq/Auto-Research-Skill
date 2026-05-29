@@ -61,7 +61,19 @@ def test_ui_help_includes_no_open(capsys) -> None:
         cli.main(["ui", "--help"])
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
+    assert "--project" in out
+    assert "--host" in out
+    assert "--port" in out
     assert "--no-open" in out
+    assert "--no-browser" in out
+
+
+def test_doctor_help_available(capsys) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["doctor", "--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "--project" in out
 
 
 def test_auth_defaults_to_status(monkeypatch, tmp_path) -> None:

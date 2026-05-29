@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from .config import build_default_config, load_config, save_config
 from .doctor import detect_metrics_from_text
 from .experiments import get_experiment_paths, load_diff_text, load_experiment_metadata
+from .log_parser import parse_metrics
 from .runner import apply_experiment, check_auth, doctor, preview_experiment, run_night
 from .sandbox import SandboxManager
 from .state_store import load_best, load_experiments
@@ -103,11 +104,17 @@ def _run_test_command(project_root: Path, command: str) -> dict[str, Any]:
     result = run_training(command=command, cwd=sandbox.project_dir, log_path=log_path, timeout_seconds=300)
     content = read_text(log_path)
     suggestions = detect_metrics_from_text(content)
+    parsed_metrics = parse_metrics(
+        log_path,
+        config.get("metric", {}).get("name", "metric"),
+        config.get("metric", {}).get("regex"),
+    )
     return {
         "returncode": result.get("returncode"),
         "timeout": result.get("timeout"),
         "log_tail": "\n".join(content.splitlines()[-80:]),
         "metric_suggestions": suggestions,
+        "parsed_metric": parsed_metrics,
     }
 
 
@@ -194,6 +201,7 @@ def _root_html(project_root: Path) -> str:
         <h2>5. Diff and Apply</h2>
         <div id="selected_exp" class="muted">点击上方实验的查看按钮。</div>
         <pre id="diff_view">暂无 diff</pre>
+        <pre id="log_view">暂无日志</pre>
         <button onclick="applySelected()">Apply this experiment</button>
       </section>
     </div>
@@ -207,7 +215,19 @@ def _root_html(project_root: Path) -> str:
     }}
     async function loadDoctor() {{
       const data = await fetchJson('/api/doctor');
-      document.getElementById('doctor').textContent = JSON.stringify(data, null, 2);
+      const gitWarning = data.git_repository && data.git_status === 'dirty'
+        ? "\\n\\n警告：Git 工作区有未提交修改，这在 sandbox 模式下是允许的。"
+        : (!data.git_repository ? "\\n\\n提示：未检测到 Git，sandbox 仍可运行，但 diff/apply 安全性会降低。" : "");
+      document.getElementById('doctor').textContent = [
+        `project_root: ${{data.project_root}}`,
+        `python_executable: ${{data.python_executable}}`,
+        `conda_environment: ${{data.conda_environment || '-'}}`,
+        `git_repository: ${{data.git_repository ? 'yes' : 'no'}}`,
+        `git_status: ${{data.git_status}}`,
+        `config_found: ${{data.config_found ? 'yes' : 'no'}}`,
+        `backend: ${{data.backend}}`,
+        `auth_status: ${{data.auth_message || '-'}}`,
+      ].join('\\n') + gitWarning;
     }}
     async function loadConfig() {{
       const data = await fetchJson('/api/config');
@@ -237,6 +257,7 @@ def _root_html(project_root: Path) -> str:
       const payload = {{ command: document.getElementById('train_command').value.trim() }};
       const data = await fetchJson('/api/test-run', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(payload) }});
       document.getElementById('setup_result').textContent = JSON.stringify(data, null, 2);
+      document.getElementById('live_log').textContent = data.log_tail || '暂无日志';
     }}
     async function startRun() {{
       await saveConfig();
@@ -246,31 +267,57 @@ def _root_html(project_root: Path) -> str:
     }}
     async function loadRunStatus() {{
       const data = await fetchJson('/api/run-status');
-      document.getElementById('run_status').textContent = JSON.stringify(data, null, 2);
+      document.getElementById('run_status').textContent = JSON.stringify({
+        running: data.running,
+        session: data.session,
+        best: data.best
+      }, null, 2);
       if (data.latest_log_tail) document.getElementById('live_log').textContent = data.latest_log_tail;
     }}
     async function loadExperiments() {{
       const data = await fetchJson('/api/experiments');
       const rows = data.items.map(item => `<tr>
-        <td>${{item.id}}</td><td>${{item.status}}</td><td>${{item.metric_value ?? ''}}</td><td>${{(item.changed_files || []).join(', ')}}</td><td>${{item.created_at || ''}}</td>
-        <td><button onclick=\"viewExperiment('${{item.id}}')\">查看</button></td>
+        <td>${{item.id}}</td>
+        <td>${{item.backend || ''}}</td>
+        <td>${{item.status}}</td>
+        <td>${{item.metric_value ?? ''}}</td>
+        <td>${{item.is_improvement ? 'yes' : 'no'}}</td>
+        <td>${{(item.changed_files || []).join(', ')}}</td>
+        <td>
+          <button onclick=\"viewExperiment('${{item.id}}')\">View Diff</button>
+          <button class=\"secondary\" onclick=\"viewLog('${{item.id}}')\">View Log</button>
+          <button onclick=\"applyExperiment('${{item.id}}')\">Apply</button>
+        </td>
       </tr>`).join('');
-      document.getElementById('experiments_table').innerHTML = `<table><thead><tr><th>ID</th><th>Status</th><th>Metric</th><th>Changed files</th><th>Created at</th><th>Actions</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+      document.getElementById('experiments_table').innerHTML = `<table><thead><tr><th>ID</th><th>Backend</th><th>Status</th><th>Metric</th><th>Improvement</th><th>Changed files</th><th>Actions</th></tr></thead><tbody>${{rows}}</tbody></table>`;
     }}
     async function viewExperiment(expId) {{
       state.selectedExp = expId;
-      const data = await fetchJson(`/api/experiments/${{expId}}`);
-      document.getElementById('selected_exp').textContent = JSON.stringify(data.metadata, null, 2);
-      document.getElementById('diff_view').textContent = data.diff || '(no diff)';
-      document.getElementById('live_log').textContent = data.log_tail || '暂无日志';
+      const meta = await fetchJson(`/api/experiments/${{expId}}`);
+      const diff = await fetchJson(`/api/experiments/${{expId}}/diff`);
+      document.getElementById('selected_exp').textContent = JSON.stringify(meta.metadata, null, 2);
+      document.getElementById('diff_view').textContent = diff.diff || '(no diff)';
+      document.getElementById('log_view').textContent = meta.log_tail || '暂无日志';
+      document.getElementById('live_log').textContent = meta.log_tail || '暂无日志';
     }}
-    async function applySelected() {{
-      if (!state.selectedExp) return;
+    async function viewLog(expId) {{
+      state.selectedExp = expId;
+      const meta = await fetchJson(`/api/experiments/${{expId}}`);
+      document.getElementById('selected_exp').textContent = JSON.stringify(meta.metadata, null, 2);
+      document.getElementById('log_view').textContent = meta.log_tail || '暂无日志';
+      document.getElementById('live_log').textContent = meta.log_tail || '暂无日志';
+    }}
+    async function applyExperiment(expId) {{
+      state.selectedExp = expId;
       if (!confirm('确认将该实验写回主项目吗？')) return;
-      const data = await fetchJson(`/api/experiments/${{state.selectedExp}}/apply`, {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{ confirm: true }}) }});
+      const data = await fetchJson(`/api/experiments/${{expId}}/apply`, {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{ confirm: true }}) }});
       alert(JSON.stringify(data, null, 2));
       await loadDoctor();
       await loadExperiments();
+    }}
+    async function applySelected() {{
+      if (!state.selectedExp) return;
+      await applyExperiment(state.selectedExp);
     }}
     async function tick() {{
       await loadRunStatus();
@@ -356,6 +403,21 @@ def create_app(project_root: Path) -> FastAPI:
                 "metadata": meta,
                 "diff": load_diff_text(project_root, exp_id),
                 "log_tail": "\n".join(read_text(log_path).splitlines()[-120:]),
+            }
+        )
+
+    @app.get("/api/experiments/{exp_id}/diff")
+    async def api_experiment_diff(exp_id: str) -> JSONResponse:
+        meta = load_experiment_metadata(project_root, exp_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail="实验不存在。")
+        preview = preview_experiment(project_root, exp_id)
+        return JSONResponse(
+            {
+                "exp_id": exp_id,
+                "diff": preview["diff"],
+                "conflicts": preview["conflicts"],
+                "safe_to_apply": preview["safe_to_apply"],
             }
         )
 

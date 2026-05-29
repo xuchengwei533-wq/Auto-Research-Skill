@@ -142,8 +142,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
     p_ui.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind.")
     p_ui.add_argument("--port", type=int, default=7860, help="Port to bind.")
-    p_ui.add_argument("--no-open", action="store_true", help="Do not open the browser automatically.")
-    p_ui.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
+    p_ui.add_argument(
+        "--no-open",
+        "--no-browser",
+        dest="no_open",
+        action="store_true",
+        help="Do not open the browser automatically.",
+    )
     return parser
 
 
@@ -321,7 +326,7 @@ def _handle_ui(args: argparse.Namespace, project_root: Path) -> int:
         project_root,
         host=args.host,
         port=int(args.port),
-        open_browser=not bool(getattr(args, "no_open", False) or getattr(args, "no_browser", False)),
+        open_browser=not bool(getattr(args, "no_open", False)),
     )
     return 0
 

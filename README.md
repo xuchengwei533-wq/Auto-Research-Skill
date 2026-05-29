@@ -8,21 +8,24 @@ It installs into your Python or conda environment, starts from the command line,
 
 ```powershell
 python -m pip install --upgrade "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
-cd D:\MyDeepLearningProject
+cd your-ml-project
 nightrunner ui
 ```
 
-Open the local browser UI, then choose:
+Recommended first steps:
 
-- goal type
-- editable files
-- train command
-- metric and direction
-- experiment rounds
+- run `nightrunner doctor` if you want a quick environment check
+- run `nightrunner ui` as the default entrypoint for new users
+- choose editable files, train command, metric, direction, and rounds in the UI
 
 NightRunner runs experiments in isolated sandboxes.
 Your main project files are not modified unless you explicitly apply an experiment.
 Git commits are optional and not required before running.
+The default backend is `sandbox`.
+If your Git working tree is dirty, NightRunner only shows a warning and still runs.
+NightRunner copies your current working tree snapshot into `.nightrunner/sandboxes/exp_xxxx`.
+During experiments, NightRunner does not modify your main project.
+Only an explicit Apply writes an experiment back to your main project.
 
 ## Manual Install
 
@@ -100,6 +103,8 @@ Backend options:
 
 - `sandbox`: default, recommended for normal users, works with dirty Git and even without Git
 - `worktree`: advanced mode, relies on Git worktree and is intended for clean Git repositories
+
+Git is optional but useful. NightRunner can run sandbox experiments without requiring a clean Git working tree. If your project is a Git repository, NightRunner can use Git information for diagnostics and diff safety, but commits are not required before running.
 
 ## Safety Model
 
