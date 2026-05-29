@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,20 @@ from .utils import write_text
 
 CONFIG_FILE_NAME = "nightrunner.yaml"
 
+DEFAULT_SANDBOX_IGNORE = [
+    ".git",
+    ".nightrunner",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "node_modules",
+]
+
 def build_default_config(
     project_name: str,
     editable_files: list[str] | None = None,
@@ -18,10 +33,12 @@ def build_default_config(
     metric_name: str = "val_loss",
     lower_is_better: bool = True,
 ) -> dict[str, Any]:
+    editable = editable_files or ["train.py"]
     return {
         "project": {"name": project_name},
+        "editable_files": editable,
         "files": {
-            "editable": editable_files or ["train.py"],
+            "editable": editable,
             "protected": [
                 ".env",
                 ".env.local",
@@ -32,8 +49,22 @@ def build_default_config(
                 "nightrunner.yaml",
             ],
         },
-        "execution": {"train_command": train_command, "timeout_seconds": 3600},
+        "execution": {
+            "backend": "sandbox",
+            "train_command": train_command,
+            "timeout_seconds": 3600,
+        },
+        "sandbox": {
+            "root": ".nightrunner/sandboxes",
+            "ignore": list(DEFAULT_SANDBOX_IGNORE),
+        },
         "metric": {"name": metric_name, "lower_is_better": lower_is_better},
+        "optimization": {
+            "goal": "Tune hyperparameters",
+            "metric": metric_name,
+            "metric_regex": None,
+            "higher_is_better": not lower_is_better,
+        },
         "agent": {
             "provider": "deepseek",
             "base_url": "https://api.deepseek.com",
@@ -43,7 +74,7 @@ def build_default_config(
             "thinking_enabled": True,
         },
         "safety": {
-            "require_clean_git": True,
+            "require_clean_git": False,
             "auto_apply_to_main": False,
             "allow_new_files": False,
             "allow_dependency_changes": False,
@@ -101,11 +132,16 @@ def load_config(project_root: Path) -> dict[str, Any]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Invalid config format in {path}. Root must be a mapping.")
-    metric = raw.get("metric", {})
+
+    cfg = deepcopy(build_default_config(project_root.name))
+    _deep_merge(cfg, raw)
+    _normalize_config(cfg)
+
+    metric = cfg.get("metric", {})
     if isinstance(metric, dict) and "regex" in metric and metric["regex"] is not None:
         if not isinstance(metric["regex"], str):
             raise ValueError("metric.regex must be a string when provided.")
-    return raw
+    return cfg
 
 
 def save_config(project_root: Path, config: dict[str, Any]) -> Path:
@@ -113,3 +149,51 @@ def save_config(project_root: Path, config: dict[str, Any]) -> Path:
     path = get_config_path(project_root)
     write_text(path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
     return path
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> None:
+    for key, value in override.items():
+        if isinstance(base.get(key), dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
+def _normalize_config(config: dict[str, Any]) -> None:
+    editable = config.get("editable_files")
+    if isinstance(editable, list) and editable:
+        config.setdefault("files", {})["editable"] = editable
+    else:
+        config["editable_files"] = list(config.get("files", {}).get("editable", ["train.py"]))
+
+    execution = config.setdefault("execution", {})
+    execution.setdefault("backend", "sandbox")
+    execution.setdefault("train_command", "python train.py")
+    execution.setdefault("timeout_seconds", 3600)
+
+    sandbox = config.setdefault("sandbox", {})
+    sandbox.setdefault("root", ".nightrunner/sandboxes")
+    sandbox_ignore = sandbox.get("ignore")
+    if not isinstance(sandbox_ignore, list):
+        sandbox["ignore"] = list(DEFAULT_SANDBOX_IGNORE)
+
+    metric = config.setdefault("metric", {})
+    optimization = config.setdefault("optimization", {})
+    if optimization.get("metric") and not metric.get("name"):
+        metric["name"] = optimization["metric"]
+    if optimization.get("metric_regex") and not metric.get("regex"):
+        metric["regex"] = optimization["metric_regex"]
+    if "higher_is_better" in optimization and "lower_is_better" not in metric:
+        metric["lower_is_better"] = not bool(optimization["higher_is_better"])
+    metric.setdefault("name", "val_loss")
+    metric.setdefault("lower_is_better", True)
+    optimization.setdefault("goal", "Tune hyperparameters")
+    optimization["metric"] = metric["name"]
+    optimization["metric_regex"] = metric.get("regex")
+    optimization["higher_is_better"] = not bool(metric.get("lower_is_better", True))
+
+    safety = config.setdefault("safety", {})
+    safety.setdefault("require_clean_git", False)
+    safety.setdefault("auto_apply_to_main", False)
+    safety.setdefault("allow_new_files", False)
+    safety.setdefault("allow_dependency_changes", False)

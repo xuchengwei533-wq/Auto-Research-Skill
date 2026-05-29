@@ -12,6 +12,7 @@ from .report import generate_summary_report
 from .runner import (
     apply_experiment,
     clean,
+    doctor,
     init_project,
     run,
     run_baseline,
@@ -21,6 +22,7 @@ from .runner import (
     tail,
 )
 from .state_store import load_best, load_experiments
+from .web_ui import launch_ui
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -127,6 +129,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tail.add_argument("--exp", type=str, default=None, help="Experiment ID, e.g. exp_0005.")
     p_tail.add_argument("--lines", type=int, default=80, help="Number of lines from tail.")
     p_tail.add_argument("-f", "--follow", action="store_true", help="Follow appended log output.")
+
+    p_doctor = sub.add_parser("doctor", help="Show project diagnostics.")
+    p_doctor.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_doctor.add_argument("--json", action="store_true", help="Print diagnostics as JSON.")
+
+    p_start = sub.add_parser("start", help="Interactive CLI wizard.")
+    p_start.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_start.add_argument("--yes", action="store_true", help="Accept defaults and minimize prompts.")
+
+    p_ui = sub.add_parser("ui", help="Start local NightRunner Web UI.")
+    p_ui.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
+    p_ui.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind.")
+    p_ui.add_argument("--port", type=int, default=7860, help="Port to bind.")
+    p_ui.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically.")
     return parser
 
 
@@ -242,10 +258,8 @@ def _handle_report(args: argparse.Namespace, project_root: Path) -> int:
 
 def _handle_apply(args: argparse.Namespace, project_root: Path) -> int:
     apply_experiment(project_root, args.exp_id)
-    print("Patch applied. Please review changes:")
-    print("git diff")
-    print("git add .")
-    print(f"git commit -m \"Apply NightRunner experiment {args.exp_id}\"")
+    print("Experiment applied to your main project.")
+    print("Please review the diff before deciding whether to commit.")
     return 0
 
 
@@ -280,6 +294,34 @@ def _handle_tail(args: argparse.Namespace, project_root: Path) -> int:
     return 0
 
 
+def _handle_doctor(args: argparse.Namespace, project_root: Path) -> int:
+    info = doctor(project_root)
+    if args.json:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return 0
+    print(f"Project root: {info['project_root']}")
+    print(f"Python executable: {info['python_executable']}")
+    print(f"Conda env: {info.get('conda_environment')}")
+    print(f"Git repository: {info.get('git_repository')}")
+    print(f"Git status: {info.get('git_status')}")
+    print(f"Config path: {info.get('config_path')}")
+    print(f"Train command: {info.get('train_command')}")
+    print(f"Editable files: {', '.join(info.get('editable_files') or [])}")
+    print(f"Auth status: {info.get('auth_ok')}")
+    print(f"NightRunner package path: {info.get('nightrunner_package_path')}")
+    return 0
+
+
+def _handle_start(args: argparse.Namespace, project_root: Path) -> int:
+    setup(project_root, yes=bool(args.yes))
+    return 0
+
+
+def _handle_ui(args: argparse.Namespace, project_root: Path) -> int:
+    launch_ui(project_root, host=args.host, port=int(args.port), open_browser=not bool(args.no_browser))
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     project_root = _project_root(getattr(args, "project", None))
     if args.command == "init":
@@ -304,6 +346,12 @@ def dispatch(args: argparse.Namespace) -> int:
         return _handle_status(args, project_root)
     if args.command == "tail":
         return _handle_tail(args, project_root)
+    if args.command == "doctor":
+        return _handle_doctor(args, project_root)
+    if args.command == "start":
+        return _handle_start(args, project_root)
+    if args.command == "ui":
+        return _handle_ui(args, project_root)
     return 1
 
 

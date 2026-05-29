@@ -1,8 +1,8 @@
 # NightRunner
 
-NightRunner is an AI-powered overnight experiment runner for machine learning projects.
+NightRunner is a local experiment UI for machine learning projects.
 
-It is installed as a CLI tool and runs inside your own Git project.
+It installs into your Python or conda environment, starts from the command line, and runs experiments in isolated sandboxes so your main project is not modified unless you explicitly apply an experiment.
 
 ## Quick Start
 
@@ -23,11 +23,18 @@ Then:
 ```powershell
 nightrunner auth login
 cd D:\MyDeepLearningProject
-nightrunner setup
-git add nightrunner.yaml .gitignore
-git commit -m "Configure NightRunner"
-nightrunner run --rounds 8
+nightrunner ui
 ```
+
+Open the local browser UI, then choose:
+
+- goal type
+- editable files
+- train command
+- metric and direction
+- experiment rounds
+
+NightRunner copies your current project files into `.nightrunner/sandboxes/` and runs experiments there. Git commits are optional and not required before running.
 
 ## Manual Install
 
@@ -48,11 +55,13 @@ NightRunner itself is lightweight and does not install training dependencies suc
 Your training project's dependencies stay in your own project environment.
 If `nightrunner` is not found on Windows after a `uv` install, run `uv tool update-shell` or restart your terminal.
 
-## Advanced Usage
+## CLI Usage
 
 ```powershell
 nightrunner init --editable main.py --train-command "python main.py" --metric val_loss --lower-is-better
 nightrunner setup --project D:\MyDeepLearningProject --yes
+nightrunner doctor
+nightrunner ui
 nightrunner baseline
 nightrunner night --rounds 8
 nightrunner report
@@ -65,6 +74,9 @@ nightrunner tail --follow
 Core commands:
 
 - `nightrunner setup`
+- `nightrunner start`
+- `nightrunner ui`
+- `nightrunner doctor`
 - `nightrunner run`
 - `nightrunner status`
 - `nightrunner tail`
@@ -86,28 +98,20 @@ Authentication commands:
 
 All project-related commands support `--project <path>` and default to `Path.cwd()`.
 
-## Why Git Is Required
+## Sandbox Execution
 
-NightRunner requires Git because:
+NightRunner now defaults to a sandbox copy backend:
 
-- It uses `git worktree` to isolate experiments safely.
-- It uses `git diff` to generate `patch.diff`.
-- It uses `git apply` to apply selected experiments.
-- It checks `git status` to avoid modifying dirty workspaces.
-- It keeps AI edits isolated from your main workspace until you explicitly apply them.
-
-If your ML project is not a Git repository yet, initialize it first:
-
-```powershell
-git init
-git add .
-git commit -m "Initial commit"
-```
+- experiments run inside `.nightrunner/sandboxes/exp_xxxx`
+- your current uncommitted files are copied into the sandbox
+- Git dirty state is allowed and is not a blocker
+- Git is optional for sandbox mode
+- `git worktree` can still be kept as an advanced backend option
 
 ## Safety Model
 
-- AI edits are applied only inside `.nightrunner/worktrees/`.
-- Main workspace changes only after `nightrunner apply exp_xxxx`.
+- AI edits are applied only inside isolated sandboxes by default.
+- Main workspace changes only after `nightrunner apply exp_xxxx` or clicking Apply in the Web UI.
 - API key is read from `DEEPSEEK_API_KEY` first, then from the user-level NightRunner auth config created by `nightrunner auth login`.
 - API key is never written to the target project directory or `nightrunner.yaml`.
 - Training dependencies belong to the user project, not NightRunner.
@@ -139,34 +143,28 @@ User auth config location:
 - Windows: `%APPDATA%/nightrunner/config.json`
 - macOS/Linux: `~/.config/nightrunner/config.json`
 
-## Terminal UI / Monitoring
+## Local Web UI
 
-During a run, NightRunner shows:
-
-- current experiment ID
-- current stage
-- editable files
-- train command
-- metric
-- current best
-- recent experiments
-- API/train/total time
-
-Monitoring commands:
+Start the UI:
 
 ```powershell
-nightrunner run --rounds 58
-
-# in another terminal
-nightrunner status
-nightrunner tail --follow
+nightrunner ui
 ```
 
-If you prefer plain logs (or in CI):
+The first version includes:
+
+- Project Doctor
+- Setup Wizard
+- Run Monitor
+- Experiments list
+- Diff and Apply view
+
+If you prefer CLI monitoring:
 
 ```powershell
-nightrunner run --rounds 58 --plain
-nightrunner night --rounds 58 --plain
+nightrunner doctor
+nightrunner status
+nightrunner tail --follow
 ```
 
 ## Configuration
@@ -176,13 +174,17 @@ NightRunner reads `nightrunner.yaml` from the target project root.
 Key sections:
 
 - `project`: display name for reporting.
+- `editable_files`: editable files for the UI and compatibility with older configs.
 - `files.editable`: files/directories AI is allowed to modify in worktrees.
 - `files.protected`: files always blocked by patch guard.
+- `execution.backend`: `sandbox` by default.
 - `execution.train_command`: training command executed in baseline/night runs.
+- `sandbox.root` and `sandbox.ignore`: sandbox location and ignore rules.
+- `optimization`: UI-facing goal and metric preferences.
 - `metric.name` and `metric.lower_is_better`: primary metric extraction and comparison direction.
 - `metric.regex` (optional): custom regex with one capture group for metric extraction.
 - `agent`: DeepSeek/OpenAI-compatible API settings.
-- `safety`: clean-git requirement and change restrictions.
+- `safety`: change restrictions. Clean Git is no longer required by default.
 - `logging`: request/response/run artifact persistence options.
 
 ## Metric Parsing

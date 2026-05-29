@@ -17,9 +17,12 @@ def test_root_help_contains_all_commands(capsys) -> None:
     for command in [
         "init",
         "setup",
+        "start",
         "baseline",
         "night",
         "run",
+        "ui",
+        "doctor",
         "report",
         "apply",
         "clean",

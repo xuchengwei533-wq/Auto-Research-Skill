@@ -53,37 +53,31 @@ def test_setup_does_not_run_baseline_by_default(monkeypatch, tmp_path: Path) -> 
     assert (tmp_path / "nightrunner.yaml").exists()
 
 
-def test_setup_explicit_baseline_with_dirty_tree_shows_specific_guidance(monkeypatch, tmp_path: Path) -> None:
+def test_setup_explicit_baseline_with_dirty_tree_is_allowed_in_sandbox_mode(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(runner, "_is_git_available", lambda: True)
     monkeypatch.setattr(runner, "is_git_repo", lambda path: True)
     monkeypatch.setattr(runner, "init_project", _fake_init_project)
     monkeypatch.setattr(runner, "check_auth", lambda project_root=None: {"ok": True, "message": "ok", "source": "environment"})
-    monkeypatch.setattr(
-        runner,
-        "run_git",
-        lambda args, cwd: " M .gitignore\n?? nightrunner.yaml\n" if args == ["status", "--porcelain"] else "",
+    called = {"baseline": False}
+
+    def fake_run_baseline(project_root: Path, force: bool = False) -> Path:
+        called["baseline"] = True
+        return project_root / ".nightrunner" / "experiments" / "baseline" / "report.md"
+
+    monkeypatch.setattr(runner, "run_baseline", fake_run_baseline)
+
+    result = runner.setup(
+        tmp_path,
+        editable_files=["train.py"],
+        train_command="python train.py",
+        metric_name="val_loss",
+        lower_is_better=True,
+        yes=True,
+        run_baseline_now=True,
     )
 
-    def fail_run_baseline(project_root: Path, force: bool = False) -> Path:
-        raise AssertionError("run_baseline should not be called when setup dirtied the tree")
-
-    monkeypatch.setattr(runner, "run_baseline", fail_run_baseline)
-
-    with pytest.raises(RuntimeError) as excinfo:
-        runner.setup(
-            tmp_path,
-            editable_files=["train.py"],
-            train_command="python train.py",
-            metric_name="val_loss",
-            lower_is_better=True,
-            yes=True,
-            run_baseline_now=True,
-        )
-
-    message = str(excinfo.value)
-    assert "NightRunner setup created or modified project config files." in message
-    assert "git add nightrunner.yaml .gitignore" in message
-    assert "nightrunner baseline" in message
+    assert result["config"].endswith("nightrunner.yaml")
+    assert called["baseline"] is True
 
 
 def test_update_gitignore_does_not_ignore_nightrunner_yaml(tmp_path: Path) -> None:

@@ -13,7 +13,6 @@ from .config import (
     save_config,
     write_default_config_if_missing,
 )
-from .git_ops import is_git_repo
 from .project_context import build_project_context, ensure_project_layout
 from .utils import now_iso, write_json, write_text
 
@@ -211,15 +210,6 @@ def init_project(
     lower_is_better: bool = True,
     update_gitignore_enabled: bool = True,
 ) -> dict[str, Any]:
-    if not is_git_repo(project_root):
-        raise RuntimeError(
-            "NightRunner requires a Git repository for safe worktree isolation.\n"
-            "Please run:\n"
-            "git init\n"
-            "git add .\n"
-            "git commit -m \"Initial commit\""
-        )
-
     ctx = build_project_context(project_root)
     ensure_project_layout(ctx)
     cfg_path = write_default_config_if_missing(

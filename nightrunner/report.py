@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_config
+from .experiments import get_experiment_paths
 from .state_store import load_best, load_experiments
 from .utils import write_text
 
 
 def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, Any]) -> None:
     """Generate per-experiment report markdown."""
-    run_dir = project_root / ".nightrunner" / "runs" / exp_id
+    paths = get_experiment_paths(project_root, exp_id)
     metrics = data.get("metrics", {})
     files_changed = data.get("files_changed", [])
     diff_summary = data.get("diff_summary", {})
@@ -81,13 +82,13 @@ def generate_experiment_report(project_root: Path, exp_id: str, data: dict[str, 
         str(data.get("decision", "")),
         "",
         "## Patch",
-        str(data.get("patch_path", run_dir / "patch.diff")),
+        str(data.get("patch_path", paths.patch_path)),
         "",
         "## Run Log",
-        str(data.get("run_log_path", run_dir / "run.log")),
+        str(data.get("run_log_path", paths.log_path)),
         "",
     ]
-    write_text(run_dir / "report.md", "\n".join(lines))
+    write_text(paths.report_path, "\n".join(lines))
 
 
 def generate_summary_report(project_root: Path) -> Path:
@@ -147,7 +148,7 @@ def generate_summary_report(project_root: Path) -> Path:
         "",
         "## Baseline",
         f"- Metric: {baseline_metric}",
-        f"- Report: .nightrunner/runs/baseline/report.md",
+        f"- Report: .nightrunner/experiments/baseline/report.md",
         "",
         "## Current Best",
         f"- Experiment: {(best or {}).get('experiment_id')}",
@@ -166,7 +167,7 @@ def generate_summary_report(project_root: Path) -> Path:
         status = rec.get("status", "")
         metric = rec.get("metric_value")
         hypothesis = str(rec.get("hypothesis", "")).replace("|", "/")
-        report_path = f".nightrunner/runs/{rid}/report.md"
+        report_path = f".nightrunner/experiments/{rid}/report.md"
         timings = rec.get("timings", {}) if isinstance(rec, dict) else {}
         api_t = timings.get("api_seconds") if isinstance(timings, dict) else None
         train_t = timings.get("training_seconds") if isinstance(timings, dict) else None
