@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .auth_cli import handle_auth_command
+from .doctor import format_doctor_report
 from .report import generate_summary_report
 from .runner import (
     apply_experiment,
@@ -22,7 +23,6 @@ from .runner import (
     tail,
 )
 from .state_store import load_best, load_experiments
-from .web_ui import launch_ui
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -142,7 +142,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--project", type=str, default=None, help="Target project path (default: cwd).")
     p_ui.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind.")
     p_ui.add_argument("--port", type=int, default=7860, help="Port to bind.")
-    p_ui.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically.")
+    p_ui.add_argument("--no-open", action="store_true", help="Do not open the browser automatically.")
+    p_ui.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -299,16 +300,7 @@ def _handle_doctor(args: argparse.Namespace, project_root: Path) -> int:
     if args.json:
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return 0
-    print(f"Project root: {info['project_root']}")
-    print(f"Python executable: {info['python_executable']}")
-    print(f"Conda env: {info.get('conda_environment')}")
-    print(f"Git repository: {info.get('git_repository')}")
-    print(f"Git status: {info.get('git_status')}")
-    print(f"Config path: {info.get('config_path')}")
-    print(f"Train command: {info.get('train_command')}")
-    print(f"Editable files: {', '.join(info.get('editable_files') or [])}")
-    print(f"Auth status: {info.get('auth_ok')}")
-    print(f"NightRunner package path: {info.get('nightrunner_package_path')}")
+    print(format_doctor_report(info))
     return 0
 
 
@@ -318,7 +310,19 @@ def _handle_start(args: argparse.Namespace, project_root: Path) -> int:
 
 
 def _handle_ui(args: argparse.Namespace, project_root: Path) -> int:
-    launch_ui(project_root, host=args.host, port=int(args.port), open_browser=not bool(args.no_browser))
+    try:
+        from .web_ui import launch_ui
+    except ImportError as exc:
+        raise RuntimeError(
+            "NightRunner UI dependencies are missing.\n"
+            "Install them with `python -m pip install -e .` or reinstall NightRunner with UI dependencies."
+        ) from exc
+    launch_ui(
+        project_root,
+        host=args.host,
+        port=int(args.port),
+        open_browser=not bool(getattr(args, "no_open", False) or getattr(args, "no_browser", False)),
+    )
     return 0
 
 

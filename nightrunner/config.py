@@ -14,7 +14,7 @@ CONFIG_FILE_NAME = "nightrunner.yaml"
 
 DEFAULT_SANDBOX_IGNORE = [
     ".git",
-    ".nightrunner",
+    ".nightrunner/sandboxes",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -24,6 +24,61 @@ DEFAULT_SANDBOX_IGNORE = [
     "env",
     ".env",
     "node_modules",
+    "runs",
+    "wandb",
+    "checkpoints",
+    "outputs",
+    ".tmp-auth",
+]
+
+DEFAULT_PROTECTED_TERMS = [
+    "seed",
+    "random_seed",
+    "random_state",
+    "split_seed",
+    "dataloader_seed",
+    "manual_seed",
+    "torch.manual_seed",
+    "torch.cuda.manual_seed",
+    "torch.cuda.manual_seed_all",
+    "np.random.seed",
+    "numpy.random.seed",
+    "random.seed",
+    "PYTHONHASHSEED",
+    "cudnn.deterministic",
+    "cudnn.benchmark",
+    "train_test_split",
+    "StratifiedKFold",
+    "KFold",
+    "GroupKFold",
+    "ShuffleSplit",
+    "random_split",
+    "train_indices",
+    "val_indices",
+    "test_indices",
+    "validation_split",
+    "test_size",
+    "metric",
+    "metrics",
+    "accuracy",
+    "f1",
+    "auc",
+    "roc_auc",
+    "rmse",
+    "mae",
+    "mse",
+    "evaluate",
+    "test",
+    "test_loader",
+    "val_loader",
+    "validation_loader",
+    "test_data",
+    "test_path",
+    "test_dir",
+    "label_column",
+    "target_column",
+    "labels",
+    "targets",
 ]
 
 def build_default_config(
@@ -61,6 +116,7 @@ def build_default_config(
         "metric": {"name": metric_name, "lower_is_better": lower_is_better},
         "optimization": {
             "goal": "Tune hyperparameters",
+            "mode": "standard",
             "metric": metric_name,
             "metric_regex": None,
             "higher_is_better": not lower_is_better,
@@ -78,6 +134,9 @@ def build_default_config(
             "auto_apply_to_main": False,
             "allow_new_files": False,
             "allow_dependency_changes": False,
+            "semantic_guard": True,
+            "allow_protected_term_edits": False,
+            "protected_terms": list(DEFAULT_PROTECTED_TERMS),
         },
         "logging": {"save_request": True, "save_response": True, "save_run_log": True},
     }
@@ -167,7 +226,12 @@ def _normalize_config(config: dict[str, Any]) -> None:
         config["editable_files"] = list(config.get("files", {}).get("editable", ["train.py"]))
 
     execution = config.setdefault("execution", {})
-    execution.setdefault("backend", "sandbox")
+    backend = str(execution.get("backend", "sandbox")).strip() or "sandbox"
+    if backend == "git_worktree":
+        backend = "worktree"
+    if backend not in {"sandbox", "worktree"}:
+        backend = "sandbox"
+    execution["backend"] = backend
     execution.setdefault("train_command", "python train.py")
     execution.setdefault("timeout_seconds", 3600)
 
@@ -188,12 +252,21 @@ def _normalize_config(config: dict[str, Any]) -> None:
     metric.setdefault("name", "val_loss")
     metric.setdefault("lower_is_better", True)
     optimization.setdefault("goal", "Tune hyperparameters")
+    optimization.setdefault("mode", "standard")
     optimization["metric"] = metric["name"]
     optimization["metric_regex"] = metric.get("regex")
     optimization["higher_is_better"] = not bool(metric.get("lower_is_better", True))
 
     safety = config.setdefault("safety", {})
-    safety.setdefault("require_clean_git", False)
+    if execution["backend"] == "worktree":
+        safety.setdefault("require_clean_git", True)
+    else:
+        safety.setdefault("require_clean_git", False)
     safety.setdefault("auto_apply_to_main", False)
     safety.setdefault("allow_new_files", False)
     safety.setdefault("allow_dependency_changes", False)
+    safety.setdefault("semantic_guard", True)
+    safety.setdefault("allow_protected_term_edits", False)
+    protected_terms = safety.get("protected_terms")
+    if not isinstance(protected_terms, list) or not protected_terms:
+        safety["protected_terms"] = list(DEFAULT_PROTECTED_TERMS)

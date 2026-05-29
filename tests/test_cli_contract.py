@@ -56,6 +56,14 @@ def test_setup_help_keeps_current_flags(capsys) -> None:
         assert flag in out
 
 
+def test_ui_help_includes_no_open(capsys) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["ui", "--help"])
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "--no-open" in out
+
+
 def test_auth_defaults_to_status(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))

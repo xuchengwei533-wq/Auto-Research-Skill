@@ -14,7 +14,7 @@ from .utils import ensure_dir
 
 DEFAULT_SANDBOX_IGNORE = [
     ".git",
-    ".nightrunner",
+    ".nightrunner/sandboxes",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -24,6 +24,11 @@ DEFAULT_SANDBOX_IGNORE = [
     "env",
     ".env",
     "node_modules",
+    "runs",
+    "wandb",
+    "checkpoints",
+    "outputs",
+    ".tmp-auth",
     "*.pyc",
     "*.pyo",
 ]
@@ -85,6 +90,9 @@ class SandboxManager:
         root_dir = sandbox.root_dir if isinstance(sandbox, Sandbox) else Path(sandbox)
         if root_dir.exists():
             shutil.rmtree(root_dir)
+
+    def cleanup_sandbox(self, exp_id: str) -> None:
+        self.remove_sandbox(self.sandbox_root / exp_id)
 
     def file_hashes(self, relative_paths: Iterable[str]) -> dict[str, str | None]:
         hashes: dict[str, str | None] = {}

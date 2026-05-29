@@ -18,8 +18,15 @@ def build_system_prompt() -> str:
         "Do not output markdown fences.\n"
         "Only modify editable files.\n"
         "Do not modify protected files.\n"
+        "Editable file permission only defines where NightRunner may propose changes.\n"
+        "Protected keys and protected regions are still enforced inside editable files.\n"
         "Do not add dependencies unless explicitly allowed.\n"
-        "Do not change evaluation logic unless editable and explicitly intended.\n"
+        "Do not change evaluation logic, evaluation metrics, test dataset paths, or split protocol.\n"
+        "Do not change reproducibility settings such as seed, random_state, manual_seed, cudnn flags, or hashing seed.\n"
+        "Do not change train/val/test split definitions, test_size, validation_split, loader assignments, labels, or targets.\n"
+        "Do not try to improve results by modifying protected terms or test protocol.\n"
+        "Search phase must keep randomness and evaluation protocol fixed.\n"
+        "If multiple seeds are desired, mention them as a later validation idea instead of editing seeds now.\n"
         "Keep changes small, local, reversible, and easy to review.\n"
         "Prefer hyperparameter and localized training/model changes.\n"
         "Architecture changes are allowed only when editable and simple.\n"
@@ -44,6 +51,13 @@ def build_user_prompt(
         "train_command": config.get("execution", {}).get("train_command"),
         "metric_name": config.get("metric", {}).get("name"),
         "lower_is_better": config.get("metric", {}).get("lower_is_better", True),
+        "protected_terms": config.get("safety", {}).get("protected_terms", []),
+        "semantic_guard": config.get("safety", {}).get("semantic_guard", True),
+        "allow_protected_term_edits": config.get("safety", {}).get("allow_protected_term_edits", False),
+        "editing_policy": (
+            "Editable file permission only defines where NightRunner may propose changes. "
+            "Protected keys and protected regions are still enforced inside editable files."
+        ),
         "current_best": best,
         "recent_experiments_summary": recent_experiments,
         "editable_file_full_contents": editable_file_contents,

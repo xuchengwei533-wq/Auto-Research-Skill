@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import build_default_config, load_config, save_config
 from .doctor import detect_metrics_from_text
-from .experiments import get_experiment_paths, load_diff_text
+from .experiments import get_experiment_paths, load_diff_text, load_experiment_metadata
 from .runner import apply_experiment, check_auth, doctor, preview_experiment, run_night
 from .sandbox import SandboxManager
 from .state_store import load_best, load_experiments
@@ -71,6 +71,8 @@ def _save_ui_config(project_root: Path, payload: dict[str, Any]) -> dict[str, An
     goal = str(payload.get("goal", "")).strip()
     if goal:
         config.setdefault("optimization", {})["goal"] = goal
+    mode = str(payload.get("mode", "standard")).strip() or "standard"
+    config.setdefault("optimization", {})["mode"] = mode
     metric = str(payload.get("metric", "")).strip()
     if metric:
         config.setdefault("metric", {})["name"] = metric
@@ -86,6 +88,8 @@ def _save_ui_config(project_root: Path, payload: dict[str, Any]) -> dict[str, An
     config.setdefault("metric", {})["lower_is_better"] = not higher_is_better
     config.setdefault("optimization", {})["higher_is_better"] = higher_is_better
     config.setdefault("execution", {})["backend"] = "sandbox"
+    config.setdefault("safety", {})["semantic_guard"] = True
+    config.setdefault("safety", {})["allow_protected_term_edits"] = False
     save_config(project_root, config)
     return config
 
@@ -134,7 +138,7 @@ def _root_html(project_root: Path) -> str:
 <body>
   <main>
     <h1>NightRunner 本地实验 UI</h1>
-    <p class="muted">NightRunner runs experiments in isolated sandboxes. Your main project files will not be changed unless you apply an experiment. Git commits are optional and not required before running.</p>
+    <p class="muted">NightRunner 在隔离 sandbox 中运行实验。除非你显式点击 Apply，否则不会改动主项目文件。Git commit 是可选项，不是运行前置条件。</p>
     <div class="grid">
       <section class="card">
         <h2>1. Project Doctor</h2>
@@ -144,13 +148,19 @@ def _root_html(project_root: Path) -> str:
         <h2>2. Setup Wizard</h2>
         <label>目标类型</label>
         <select id="goal">
-          <option> Tune hyperparameters </option>
-          <option> Improve model architecture </option>
-          <option> Improve training strategy </option>
-          <option> Custom goal </option>
+          <option>Tune hyperparameters</option>
+          <option>Improve model architecture</option>
+          <option>Improve training strategy</option>
+          <option>Custom goal</option>
+        </select>
+        <label>运行模式</label>
+        <select id="mode">
+          <option value="standard">标准模式</option>
+          <option value="config_only">Config files only - safest</option>
         </select>
         <label>Editable files（每行一个）</label>
         <textarea id="editable_files"></textarea>
+        <div class="muted" style="margin:6px 0 10px;">Editable file permission only defines where NightRunner may propose changes. Protected keys and protected regions are still enforced inside editable files.</div>
         <label>训练命令</label>
         <textarea id="train_command"></textarea>
         <label>指标名</label>
@@ -202,6 +212,7 @@ def _root_html(project_root: Path) -> str:
     async function loadConfig() {{
       const data = await fetchJson('/api/config');
       document.getElementById('goal').value = data.optimization.goal || 'Tune hyperparameters';
+      document.getElementById('mode').value = data.optimization.mode || 'standard';
       document.getElementById('editable_files').value = (data.files.editable || []).join('\\n');
       document.getElementById('train_command').value = data.execution.train_command || '';
       document.getElementById('metric').value = data.metric.name || '';
@@ -211,6 +222,7 @@ def _root_html(project_root: Path) -> str:
     async function saveConfig() {{
       const payload = {{
         goal: document.getElementById('goal').value.trim(),
+        mode: document.getElementById('mode').value.trim(),
         editable_files: document.getElementById('editable_files').value.split('\\n').map(x => x.trim()).filter(Boolean),
         train_command: document.getElementById('train_command').value.trim(),
         metric: document.getElementById('metric').value.trim(),
@@ -324,6 +336,7 @@ def create_app(project_root: Path) -> FastAPI:
                 "best": load_best(project_root),
                 "running": coordinator.is_running(),
                 "latest_log_tail": latest_log_tail,
+                "doctor": doctor(project_root),
             }
         )
 

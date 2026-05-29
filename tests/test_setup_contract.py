@@ -14,7 +14,7 @@ def _fake_init_project(
     train_command="python train.py",
     metric_name="val_loss",
     lower_is_better=True,
-    update_gitignore=True,
+    update_gitignore=False,
 ):
     (project_root / ".nightrunner" / "state").mkdir(parents=True, exist_ok=True)
     save_config(
@@ -29,6 +29,8 @@ def _fake_init_project(
     )
     if update_gitignore:
         setup_flow.update_gitignore(project_root)
+    elif (project_root / ".git").exists():
+        setup_flow.update_git_exclude(project_root)
     return {
         "project_root": str(project_root),
         "config": str(project_root / "nightrunner.yaml"),
@@ -69,6 +71,7 @@ def test_validate_editable_paths_accepts_normal_and_rejects_nested(tmp_path: Pat
 def test_run_setup_yes_mode_generates_config_without_api_key(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "examples" / "mnist").mkdir(parents=True)
     (tmp_path / "examples" / "mnist" / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / ".git" / "info").mkdir(parents=True)
     monkeypatch.setattr(runner, "init_project", _fake_init_project)
     monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(AssertionError("input() should not be called")))
 
@@ -91,7 +94,8 @@ def test_run_setup_yes_mode_generates_config_without_api_key(monkeypatch, tmp_pa
     assert "api_key:" not in serialized
     assert cfg.get("agent", {}).get("api_key_env") == "DEEPSEEK_API_KEY"
 
-    gitignore = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-    assert ".nightrunner/" in gitignore
-    assert "nightrunner_summary.md" in gitignore
-    assert "nightrunner.yaml" not in gitignore
+    assert not (tmp_path / ".gitignore").exists()
+    exclude = (tmp_path / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert ".nightrunner/" in exclude
+    assert "nightrunner_summary.md" in exclude
+    assert "nightrunner.yaml" not in exclude

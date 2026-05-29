@@ -13,6 +13,7 @@ from .config import (
     save_config,
     write_default_config_if_missing,
 )
+from .git_ops import is_git_repo
 from .project_context import build_project_context, ensure_project_layout
 from .utils import now_iso, write_json, write_text
 
@@ -54,6 +55,25 @@ def update_gitignore(project_root: Path) -> None:
             lines.append("")
         lines.extend(to_add)
         write_text(path, "\n".join(lines) + "\n")
+
+
+def update_git_exclude(project_root: Path) -> bool:
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        return False
+    if git_dir.is_file():
+        return False
+    info_exclude = git_dir / "info" / "exclude"
+    current = info_exclude.read_text(encoding="utf-8") if info_exclude.exists() else ""
+    lines = current.splitlines()
+    existing = set(lines)
+    to_add = [line for line in NIGHTRUNNER_GITIGNORE_LINES if line not in existing]
+    if to_add:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(to_add)
+        write_text(info_exclude, "\n".join(lines) + "\n")
+    return True
 
 
 def _has_git_repo_marker(path: Path) -> bool:
@@ -208,7 +228,7 @@ def init_project(
     train_command: str = "python train.py",
     metric_name: str = "val_loss",
     lower_is_better: bool = True,
-    update_gitignore_enabled: bool = True,
+    update_gitignore_enabled: bool = False,
 ) -> dict[str, Any]:
     ctx = build_project_context(project_root)
     ensure_project_layout(ctx)
@@ -238,6 +258,8 @@ def init_project(
         )
     if update_gitignore_enabled:
         update_gitignore(project_root)
+    elif is_git_repo(project_root):
+        update_git_exclude(project_root)
     return {
         "project_root": str(project_root.resolve()),
         "config": str(cfg_path),
@@ -309,11 +331,6 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
     if not api_key_env:
         api_key_env = "DEEPSEEK_API_KEY"
 
-    should_update_gitignore = True if options.yes else prompt_yes_no(
-        "Add NightRunner runtime artifacts to .gitignore?",
-        default_yes=True,
-    )
-
     from . import runner as runner_module
 
     init_result = runner_module.init_project(
@@ -322,7 +339,7 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
         train_command=train_command,
         metric_name=metric_name,
         lower_is_better=bool(lower_is_better),
-        update_gitignore=should_update_gitignore,
+        update_gitignore=False,
     )
 
     cfg = load_config(project_root)

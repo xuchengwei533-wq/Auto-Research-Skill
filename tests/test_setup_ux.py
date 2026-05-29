@@ -8,7 +8,7 @@ from nightrunner import runner
 from nightrunner.config import build_default_config, save_config
 
 
-def _fake_init_project(project_root: Path, editable_files=None, train_command="python train.py", metric_name="val_loss", lower_is_better=True, update_gitignore=True):
+def _fake_init_project(project_root: Path, editable_files=None, train_command="python train.py", metric_name="val_loss", lower_is_better=True, update_gitignore=False):
     (project_root / ".nightrunner" / "state").mkdir(parents=True, exist_ok=True)
     save_config(
         project_root,

@@ -40,6 +40,7 @@ def collect_doctor_info(project_root: Path) -> dict[str, Any]:
     conda_prefix = os.environ.get("CONDA_PREFIX")
     auth = auth_status()
     return {
+        "nightrunner_executable_path": sys.executable,
         "project_root": str(project_root),
         "python_executable": sys.executable,
         "conda_environment": conda_env,
@@ -51,9 +52,13 @@ def collect_doctor_info(project_root: Path) -> dict[str, Any]:
         "config_path": str(config_path),
         "train_command": config.get("execution", {}).get("train_command"),
         "editable_files": config.get("files", {}).get("editable", []),
+        "metric_name": config.get("metric", {}).get("name"),
+        "metric_regex": config.get("metric", {}).get("regex"),
+        "higher_is_better": not bool(config.get("metric", {}).get("lower_is_better", True)),
         "auth_ok": bool(auth.get("ok")),
         "auth_message": auth.get("message"),
         "backend": config.get("execution", {}).get("backend", "sandbox"),
+        "state_dir": str(project_root / ".nightrunner"),
         "candidate_files": suggest_editable_files(project_root),
     }
 
@@ -79,3 +84,40 @@ def detect_metrics_from_text(text: str) -> list[dict[str, str]]:
         if re.search(pattern, lowered, flags=re.MULTILINE):
             found.append({"name": name, "regex": pattern})
     return found
+
+
+def format_doctor_report(info: dict[str, Any]) -> str:
+    git_hint = ""
+    if info.get("git_repository") and info.get("git_status") == "dirty":
+        git_hint = (
+            "Your Git working tree has uncommitted changes. This is okay in sandbox mode.\n"
+            "NightRunner will copy your current files into isolated sandboxes."
+        )
+    elif not info.get("git_repository"):
+        git_hint = (
+            "Git is not detected. NightRunner can still run sandbox experiments, "
+            "but diff/apply safety may be reduced."
+        )
+    direction = "higher is better" if info.get("higher_is_better") else "lower is better"
+    lines = [
+        "NightRunner Doctor",
+        "",
+        f"NightRunner executable path: {info.get('nightrunner_executable_path')}",
+        f"NightRunner package path: {info.get('nightrunner_package_path')}",
+        f"Project root: {info.get('project_root')}",
+        f"Python executable: {info.get('python_executable')}",
+        f"Conda environment: {info.get('conda_environment') or '-'}",
+        f"Git repository: {'yes' if info.get('git_repository') else 'no'}",
+        f"Git status: {info.get('git_status')}",
+        f"Config file: {'found' if info.get('config_found') else 'missing'}",
+        f"Config path: {info.get('config_path')}",
+        f"Backend: {info.get('backend')}",
+        f"Editable files: {', '.join(info.get('editable_files') or []) or '-'}",
+        f"Train command: {info.get('train_command') or '-'}",
+        f"Metric: {info.get('metric_name') or '-'} ({direction})",
+        f"Auth status: {info.get('auth_message') or '-'}",
+        f".nightrunner state dir: {info.get('state_dir')}",
+    ]
+    if git_hint:
+        lines.extend(["", git_hint])
+    return "\n".join(lines)

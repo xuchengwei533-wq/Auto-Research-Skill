@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 from pathlib import Path
 from typing import Any
 
+from .config import DEFAULT_PROTECTED_TERMS
 from .git_ops import run_git
+from .utils import read_text
 
 DEPENDENCY_FILES = {
     "requirements.txt",
@@ -20,6 +23,11 @@ DEPENDENCY_FILES = {
     "yarn.lock",
     "pnpm-lock.yaml",
 }
+
+SEMANTIC_PROTECTION_MESSAGE = (
+    "Editable file permission only defines where NightRunner may propose changes. "
+    "Protected keys and protected regions are still enforced inside editable files."
+)
 
 
 def _norm(path: str | Path) -> str:
@@ -93,6 +101,66 @@ def validate_changed_files(
         run_dir.mkdir(parents=True, exist_ok=True)
         payload = {"violations": violations}
         (run_dir / "violation.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return result
+
+
+def validate_semantic_changes(
+    original_root: Path,
+    candidate_root: Path,
+    changed_files: list[str],
+    protected_terms: list[str] | None = None,
+    enabled: bool = True,
+    allow_protected_term_edits: bool = False,
+    run_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Reject diffs that modify protected semantic keys inside editable files."""
+    if not enabled or allow_protected_term_edits:
+        return {"ok": True, "violations": []}
+
+    lowered_terms = [str(term).strip().lower() for term in (protected_terms or DEFAULT_PROTECTED_TERMS) if str(term).strip()]
+    violations: list[dict[str, str]] = []
+
+    for changed in [_norm(path) for path in changed_files]:
+        original_text = read_text(original_root / changed, default="")
+        candidate_text = read_text(candidate_root / changed, default="")
+        if original_text == candidate_text:
+            continue
+        diff_lines = difflib.unified_diff(
+            original_text.splitlines(),
+            candidate_text.splitlines(),
+            fromfile=f"a/{changed}",
+            tofile=f"b/{changed}",
+            lineterm="",
+        )
+        for line in diff_lines:
+            if not line or line.startswith(("---", "+++", "@@")):
+                continue
+            if not line.startswith(("+", "-")):
+                continue
+            lowered_line = line[1:].lower()
+            for term in lowered_terms:
+                if term and term.lower() in lowered_line:
+                    violations.append(
+                        {
+                            "type": "protected_term",
+                            "file": changed,
+                            "term": term,
+                            "message": (
+                                f'Rejected by safety guard: attempted to modify protected term "{term}" '
+                                f"in {changed}"
+                            ),
+                        }
+                    )
+                    break
+
+    result = {"ok": len(violations) == 0, "violations": violations, "note": SEMANTIC_PROTECTION_MESSAGE}
+    if (not result["ok"]) and run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {"violations": violations, "note": SEMANTIC_PROTECTION_MESSAGE}
+        (run_dir / "semantic_violation.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

@@ -27,11 +27,25 @@ from .experiments import (
     write_changed_files,
     write_experiment_idea,
 )
-from .git_ops import GitError, cleanup_nightrunner_branches, create_worktree, is_git_repo, remove_worktree, run_git
+from .git_ops import (
+    GitError,
+    cleanup_nightrunner_branches,
+    create_worktree,
+    ensure_clean_worktree,
+    is_git_repo,
+    remove_worktree,
+    run_git,
+    save_diff,
+)
 from .setup_flow import scan_python_files as setup_scan_python_files
 from .setup_flow import validate_editable_paths as setup_validate_editable_paths
 from .log_parser import parse_metrics
-from .patch_guard import get_changed_files, get_new_files, validate_changed_files
+from .patch_guard import (
+    get_changed_files,
+    get_new_files,
+    validate_changed_files,
+    validate_semantic_changes,
+)
 from .patch_handler import (
     InvalidModelResponse,
     PatchApplyError,
@@ -78,6 +92,55 @@ def _validate_editable_paths(project_root: Path, editable_files: list[str]) -> N
 
 def _scan_python_files(project_root: Path) -> list[str]:
     return setup_scan_python_files(project_root)
+
+
+def _backend(config: dict[str, Any]) -> str:
+    value = str(config.get("execution", {}).get("backend", "sandbox")).strip()
+    return "worktree" if value in {"worktree", "git_worktree"} else "sandbox"
+
+
+def _is_git_dirty(project_root: Path) -> bool:
+    if not is_git_repo(project_root):
+        return False
+    try:
+        return bool(run_git(["status", "--porcelain"], project_root).strip())
+    except Exception:
+        return False
+
+
+def _emit_backend_warning(project_root: Path, config: dict[str, Any], emit: callable | None = None) -> None:
+    out = emit or print
+    backend = _backend(config)
+    if backend == "sandbox" and _is_git_dirty(project_root):
+        out("Your Git working tree has uncommitted changes. This is okay in sandbox mode.")
+        out("NightRunner will copy your current files into isolated sandboxes.")
+    elif backend == "sandbox" and not is_git_repo(project_root):
+        out("Git is not detected. NightRunner can still run sandbox experiments, but diff/apply safety may be reduced.")
+
+
+def _ensure_backend_ready(project_root: Path, config: dict[str, Any], emit: callable | None = None) -> None:
+    backend = _backend(config)
+    if backend == "worktree":
+        if not is_git_repo(project_root):
+            raise RuntimeError("Worktree backend requires a Git repository.")
+        if bool(config.get("safety", {}).get("require_clean_git", True)):
+            ensure_clean_worktree(project_root)
+        return
+    _emit_backend_warning(project_root, config, emit=emit)
+
+
+def _ensure_config_only_mode(config: dict[str, Any]) -> None:
+    mode = str(config.get("optimization", {}).get("mode", "standard")).strip().lower()
+    if mode != "config_only":
+        return
+    editable = list(config.get("files", {}).get("editable", []))
+    allowed = {".yaml", ".yml", ".json", ".toml"}
+    invalid = [path for path in editable if Path(path).suffix.lower() not in allowed]
+    if invalid:
+        raise RuntimeError(
+            "Config files only - safest 模式只允许修改 YAML / JSON / TOML 文件。\n"
+            + "\n".join(f"- {path}" for path in invalid)
+        )
 
 
 def _baseline_exists(project_root: Path) -> bool:
@@ -179,8 +242,8 @@ def _load_baseline_record(project_root: Path) -> dict[str, Any] | None:
 
 
 def _create_workspace(project_root: Path, config: dict[str, Any], exp_id: str) -> dict[str, Any]:
-    backend = str(config.get("execution", {}).get("backend", "sandbox"))
-    if backend == "git_worktree":
+    backend = _backend(config)
+    if backend == "worktree":
         if not is_git_repo(project_root):
             raise RuntimeError("Git worktree backend requires a Git repository.")
         worktree_path, branch_name = create_worktree(project_root, exp_id)
@@ -203,17 +266,14 @@ def _create_workspace(project_root: Path, config: dict[str, Any], exp_id: str) -
 def _cleanup_workspace(project_root: Path, workspace: dict[str, Any] | None, keep: bool) -> None:
     if not workspace:
         return
-    if workspace.get("backend") == "git_worktree":
+    if workspace.get("backend") == "worktree":
         worktree_path = workspace.get("worktree_path")
         if isinstance(worktree_path, Path) and worktree_path.exists() and not keep:
             try:
                 remove_worktree(project_root, worktree_path, workspace.get("branch_name"))
             except GitError:
                 pass
-        return
-    sandbox_dir = workspace.get("sandbox_dir")
-    if isinstance(sandbox_dir, Path) and sandbox_dir.exists() and not keep:
-        shutil.rmtree(sandbox_dir, ignore_errors=True)
+    # Sandboxes are preserved for later diff review and explicit apply.
 
 
 def _persist_record(project_root: Path, record: dict[str, Any]) -> None:
@@ -239,7 +299,7 @@ def init_project(
     train_command: str = "python train.py",
     metric_name: str = "val_loss",
     lower_is_better: bool = True,
-    update_gitignore: bool = True,
+    update_gitignore: bool = False,
 ) -> dict[str, Any]:
     """Initialize NightRunner runtime files in a project."""
     project_root = project_root.resolve()
@@ -269,6 +329,8 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
     """Run baseline training in an isolated sandbox and save best.json."""
     _ensure_layout(project_root)
     config = load_config(project_root)
+    _ensure_config_only_mode(config)
+    _ensure_backend_ready(project_root, config)
     paths = get_experiment_paths(project_root, "baseline")
     if paths.metadata_path.exists() and not force:
         return paths.report_path
@@ -285,7 +347,7 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         "editable_files": editable,
         "base_file_hashes": collect_file_hashes(project_root, editable),
         "created_at": now_iso(),
-        "backend": "sandbox",
+        "backend": _backend(config),
         "train_command": config.get("execution", {}).get("train_command", "python train.py"),
         "hypothesis": "在隔离沙箱中运行基线训练，建立参考指标。",
         "reason": "NightRunner 需要 baseline 才能比较实验改进。",
@@ -301,7 +363,8 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
     }
     _persist_record(project_root, record)
     workspace = _create_workspace(project_root, config, "baseline")
-    record["sandbox_dir"] = _safe_relative(Path(workspace["project_dir"]), project_root)
+    if workspace.get("backend") == "sandbox":
+        record["sandbox_dir"] = _safe_relative(Path(workspace["project_dir"]), project_root)
     t_total = perf_counter()
     try:
         t_train = perf_counter()
@@ -349,6 +412,7 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         record["traceback"] = traceback.format_exc()
         write_text(paths.dir / "error.txt", record["traceback"])
     finally:
+        record["completed_at"] = now_iso()
         record["timings"]["total_seconds"] = perf_counter() - t_total
         _persist_record(project_root, record)
         generate_experiment_report(project_root, "baseline", record)
@@ -370,6 +434,8 @@ def run_night(
         raise ValueError("--rounds must be > 0")
     _ensure_layout(project_root)
     config = load_config(project_root)
+    _ensure_config_only_mode(config)
+    _ensure_backend_ready(project_root, config, emit=(ui.log if ui else print))
     if not dry_run and not _baseline_exists(project_root):
         run_baseline(project_root)
 
@@ -399,7 +465,7 @@ def run_night(
             "created_at": now_iso(),
             "current_round": index + 1,
             "total_rounds": rounds,
-            "backend": config.get("execution", {}).get("backend", "sandbox"),
+            "backend": _backend(config),
             "train_command": config.get("execution", {}).get("train_command", "python train.py"),
             "timings": {
                 "workspace_seconds": 0.0,
@@ -508,10 +574,26 @@ def run_night(
                 record["violations"] = guard_result["violations"]
                 raise RuntimeError("Patch guard failed.")
 
+            semantic_result = validate_semantic_changes(
+                original_root=project_root,
+                candidate_root=Path(workspace["project_dir"]),
+                changed_files=changed_files,
+                protected_terms=config.get("safety", {}).get("protected_terms", []),
+                enabled=bool(config.get("safety", {}).get("semantic_guard", True)),
+                allow_protected_term_edits=bool(config.get("safety", {}).get("allow_protected_term_edits", False)),
+                run_dir=paths.dir,
+            )
+            if not semantic_result["ok"]:
+                record["status"] = "violation"
+                record["violations"] = semantic_result["violations"]
+                details = semantic_result["violations"][0].get("message") if semantic_result["violations"] else "Semantic guard failed."
+                raise RuntimeError(str(details))
+
             if workspace.get("backend") == "sandbox":
                 diff_text, changed_files = diff_editable_files(project_root, Path(workspace["project_dir"]), editable)
                 write_text(paths.patch_path, diff_text)
             else:
+                save_diff(Path(workspace["project_dir"]), paths.patch_path)
                 changed_files = get_changed_files(Path(workspace["project_dir"]))
                 diff_text = read_text(paths.patch_path)
 
@@ -597,13 +679,14 @@ def run_night(
             write_text(paths.dir / "error.txt", record.get("traceback", ""))
         finally:
             record["stage"] = "已完成"
+            record["completed_at"] = now_iso()
             record["timings"]["total_seconds"] = perf_counter() - t_total
             _persist_record(project_root, record)
             generate_experiment_report(project_root, exp_id, record)
             append_experiment(project_root, record)
             generate_summary_report(project_root)
             ui.finish_experiment(record)
-            keep_workspace = bool(record.get("status") == "keep" and workspace and workspace.get("backend") == "git_worktree")
+            keep_workspace = bool(record.get("status") == "keep" and workspace and workspace.get("backend") == "worktree")
             _cleanup_workspace(project_root, workspace, keep=keep_workspace)
 
     summary = generate_summary_report(project_root)
@@ -620,6 +703,8 @@ def run(project_root: Path, rounds: int = 1, dry_run: bool = False, plain: bool 
         config = load_config(project_root)
     except FileNotFoundError as exc:
         raise RuntimeError("No nightrunner.yaml found.\nRun `nightrunner setup` first.") from exc
+    _ensure_config_only_mode(config)
+    _ensure_backend_ready(project_root, config)
     auth = check_auth(project_root)
     if not auth["ok"]:
         env_name = str(config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"))
@@ -645,9 +730,16 @@ def setup(
     """Interactive or semi-automated setup wizard for first-time onboarding."""
     print(f"Project root: {project_root}")
     if is_git_repo(project_root):
-        print("Your Git working tree may be dirty. This is okay in sandbox mode.")
+        print("Git repository: yes")
+        try:
+            _emit_backend_warning(project_root, load_config(project_root))
+        except FileNotFoundError:
+            print("Your Git working tree may be dirty. This is okay in sandbox mode.")
+            print("NightRunner will copy your current files into isolated sandboxes.")
     else:
         print("Git is not detected. NightRunner can still run sandbox experiments.")
+    print("Editable file permission only defines where NightRunner may propose changes.")
+    print("Protected keys and protected regions are still enforced inside editable files.")
     result = run_setup_flow(
         project_root,
         SetupOptions(

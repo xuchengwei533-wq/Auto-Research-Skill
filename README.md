@@ -6,22 +6,8 @@ It installs into your Python or conda environment, starts from the command line,
 
 ## Quick Start
 
-Windows PowerShell:
-
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.ps1 | iex"
-```
-
-macOS/Linux:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/xuchengwei533-wq/Auto-Research-Skill/develop/install.sh | bash
-```
-
-Then:
-
-```powershell
-nightrunner auth login
+python -m pip install --upgrade "git+https://github.com/xuchengwei533-wq/Auto-Research-Skill.git@develop"
 cd D:\MyDeepLearningProject
 nightrunner ui
 ```
@@ -34,7 +20,9 @@ Open the local browser UI, then choose:
 - metric and direction
 - experiment rounds
 
-NightRunner copies your current project files into `.nightrunner/sandboxes/` and runs experiments there. Git commits are optional and not required before running.
+NightRunner runs experiments in isolated sandboxes.
+Your main project files are not modified unless you explicitly apply an experiment.
+Git commits are optional and not required before running.
 
 ## Manual Install
 
@@ -108,10 +96,17 @@ NightRunner now defaults to a sandbox copy backend:
 - Git is optional for sandbox mode
 - `git worktree` can still be kept as an advanced backend option
 
+Backend options:
+
+- `sandbox`: default, recommended for normal users, works with dirty Git and even without Git
+- `worktree`: advanced mode, relies on Git worktree and is intended for clean Git repositories
+
 ## Safety Model
 
 - AI edits are applied only inside isolated sandboxes by default.
 - Main workspace changes only after `nightrunner apply exp_xxxx` or clicking Apply in the Web UI.
+- Editable file permission only defines where NightRunner may propose changes. Protected keys and protected regions are still enforced inside editable files.
+- Semantic guard rejects edits that touch protected terms such as `seed`, `random_state`, `manual_seed`, split definitions, evaluation metrics, and test dataset paths.
 - API key is read from `DEEPSEEK_API_KEY` first, then from the user-level NightRunner auth config created by `nightrunner auth login`.
 - API key is never written to the target project directory or `nightrunner.yaml`.
 - Training dependencies belong to the user project, not NightRunner.
@@ -158,6 +153,7 @@ The first version includes:
 - Run Monitor
 - Experiments list
 - Diff and Apply view
+- Config files only - safest mode for YAML / JSON / TOML tuning
 
 If you prefer CLI monitoring:
 
@@ -181,10 +177,13 @@ Key sections:
 - `execution.train_command`: training command executed in baseline/night runs.
 - `sandbox.root` and `sandbox.ignore`: sandbox location and ignore rules.
 - `optimization`: UI-facing goal and metric preferences.
+- `optimization.mode`: `standard` or `config_only`.
 - `metric.name` and `metric.lower_is_better`: primary metric extraction and comparison direction.
 - `metric.regex` (optional): custom regex with one capture group for metric extraction.
 - `agent`: DeepSeek/OpenAI-compatible API settings.
-- `safety`: change restrictions. Clean Git is no longer required by default.
+- `safety`: change restrictions. Clean Git is no longer required by default in sandbox mode.
+- `safety.semantic_guard`: semantic validator for protected terms inside editable files.
+- `safety.protected_terms`: protected reproducibility / split / metric / test-path terms.
 - `logging`: request/response/run artifact persistence options.
 
 ## Metric Parsing
