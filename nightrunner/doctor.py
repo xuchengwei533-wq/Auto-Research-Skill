@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,17 +10,8 @@ from typing import Any
 from .auth_cli import auth_status
 from .config import get_config_path, load_config
 from .git_ops import is_git_repo, run_git
+from .log_parser import detect_metric_candidates_from_text
 from .setup_flow import scan_python_files
-
-COMMON_METRIC_PATTERNS: dict[str, str] = {
-    "accuracy": r"accuracy\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "loss": r"loss\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "val_loss": r"val[_ ]loss\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "rmse": r"rmse\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "mae": r"mae\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "f1": r"f1\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-    "auc": r"auc\s*[:=]\s*([-+]?\d+(?:\.\d+)?)",
-}
 
 
 def collect_doctor_info(project_root: Path) -> dict[str, Any]:
@@ -78,12 +68,10 @@ def suggest_editable_files(project_root: Path) -> list[str]:
 
 
 def detect_metrics_from_text(text: str) -> list[dict[str, str]]:
-    found: list[dict[str, str]] = []
-    lowered = text.lower()
-    for name, pattern in COMMON_METRIC_PATTERNS.items():
-        if re.search(pattern, lowered, flags=re.MULTILINE):
-            found.append({"name": name, "regex": pattern})
-    return found
+    return [
+        {"name": str(item["name"]), "regex": str(item["regex"])}
+        for item in detect_metric_candidates_from_text(text)
+    ]
 
 
 def format_doctor_report(info: dict[str, Any]) -> str:

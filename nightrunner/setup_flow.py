@@ -9,12 +9,16 @@ from typing import Any
 from . import __version__
 from .config import (
     NIGHTRUNNER_GITIGNORE_LINES,
+    build_default_config,
     load_config,
     save_config,
     write_default_config_if_missing,
 )
 from .git_ops import is_git_repo
+from .log_parser import detect_metric_candidates
 from .project_context import build_project_context, ensure_project_layout
+from .sandbox import SandboxManager
+from .train_runner import run_training
 from .utils import now_iso, write_json, write_text
 
 
@@ -196,6 +200,57 @@ def _detect_train_command_default(candidates: list[str]) -> str:
     return "python train.py"
 
 
+def _detect_metric_from_train_command(project_root: Path, train_command: str) -> dict[str, Any]:
+    cfg = build_default_config(project_root.name, train_command=train_command)
+    manager = SandboxManager.from_config(project_root, cfg)
+    sandbox = manager.create_sandbox("setup_metric_probe")
+    ctx = build_project_context(project_root)
+    ensure_project_layout(ctx)
+    log_path = ctx.tmp_dir / "setup_metric_probe.log"
+    try:
+        result = run_training(
+            command=train_command,
+            cwd=sandbox.project_dir,
+            log_path=log_path,
+            timeout_seconds=300,
+        )
+        candidates = detect_metric_candidates(log_path)
+        return {
+            "ok": bool(candidates),
+            "returncode": result.get("returncode"),
+            "timeout": result.get("timeout"),
+            "log_path": str(log_path),
+            "candidates": candidates,
+            "selected": candidates[0] if candidates else None,
+        }
+    finally:
+        manager.cleanup_sandbox("setup_metric_probe")
+
+
+def _print_metric_candidates(candidates: list[dict[str, Any]]) -> None:
+    if not candidates:
+        return
+    print("")
+    print("Detected optimization metrics:")
+    for idx, item in enumerate(candidates, start=1):
+        direction = "lower is better" if item.get("lower_is_better") else "higher is better"
+        print(f"[{idx}] {item.get('name')} = {item.get('value')} ({direction})")
+
+
+def _select_metric_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("No metric candidates available.")
+    raw = input("Select metric [1]:\n> ").strip()
+    if not raw:
+        return candidates[0]
+    if not raw.isdigit():
+        raise ValueError(f"Metric selection must be a number: {raw}")
+    idx = int(raw)
+    if idx < 1 or idx > len(candidates):
+        raise ValueError(f"Metric selection index out of range: {raw}")
+    return candidates[idx - 1]
+
+
 @dataclass
 class SetupOptions:
     editable_files: list[str] | None = None
@@ -299,23 +354,56 @@ def run_setup(project_root: Path, options: SetupOptions) -> dict[str, Any]:
     else:
         train_command = options.train_command
 
+    lower_is_better = options.lower_is_better
+    metric_regex_value = options.metric_regex
     metric_name = options.metric_name
+    if metric_name is None:
+        should_probe_metric = options.yes
+        if not options.yes:
+            print("")
+            should_probe_metric = prompt_yes_no(
+                "Run a sandbox test to auto-detect the optimization metric?",
+                default_yes=True,
+            )
+        if should_probe_metric:
+            print("")
+            print("Running training command once in a sandbox to detect metrics...")
+            try:
+                probe = _detect_metric_from_train_command(project_root, train_command)
+                metric_candidates = list(probe.get("candidates", []))
+            except Exception as exc:
+                metric_candidates = []
+                print(f"Metric auto-detection failed: {exc}")
+            if metric_candidates:
+                if options.yes:
+                    selected_metric = metric_candidates[0]
+                else:
+                    _print_metric_candidates(metric_candidates)
+                    selected_metric = _select_metric_candidate(metric_candidates)
+                metric_name = str(selected_metric.get("name") or "val_loss")
+                if metric_regex_value is None:
+                    metric_regex_value = str(selected_metric.get("regex") or "")
+                if lower_is_better is None:
+                    lower_is_better = bool(selected_metric.get("lower_is_better", True))
+                direction = "lower is better" if lower_is_better else "higher is better"
+                print(f"Optimization metric [auto]: {metric_name} ({direction})")
+            elif options.yes:
+                print("Optimization metric auto-detection found no candidates.")
+
     if metric_name is None:
         if options.yes:
             metric_name = "val_loss"
-            print(f"Metric name [auto]: {metric_name}")
+            print(f"Optimization metric [fallback]: {metric_name}")
         else:
             print("")
-            metric_name = input("Metric name [val_loss]:\n> ").strip() or "val_loss"
+            metric_name = input("Optimization metric [val_loss]:\n> ").strip() or "val_loss"
 
-    lower_is_better = options.lower_is_better
     if lower_is_better is None:
         lower_is_better = True if options.yes else prompt_yes_no(
             "Is lower better for this metric?",
             default_yes=True,
         )
 
-    metric_regex_value = options.metric_regex
     if metric_regex_value is None and options.yes:
         metric_regex_value = ""
     elif metric_regex_value is None:

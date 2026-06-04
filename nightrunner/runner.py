@@ -333,7 +333,9 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
     _ensure_backend_ready(project_root, config)
     paths = get_experiment_paths(project_root, "baseline")
     if paths.metadata_path.exists() and not force:
-        return paths.report_path
+        existing = load_experiment_metadata(project_root, "baseline")
+        if existing.get("status") == "baseline" and existing.get("metric_value") is not None:
+            return paths.report_path
 
     editable = list(config.get("files", {}).get("editable", []))
     record: dict[str, Any] = {
@@ -858,10 +860,21 @@ def preview_experiment(project_root: Path, exp_id: str) -> dict[str, Any]:
     }
 
 
-def apply_experiment(project_root: Path, exp_id: str, confirm: bool = True) -> Path:
+def apply_experiment(
+    project_root: Path,
+    exp_id: str,
+    confirm: bool = True,
+    allow_non_keep: bool = False,
+) -> Path:
     """Apply selected experiment changes back to the main project."""
     preview = preview_experiment(project_root, exp_id)
     metadata = preview["metadata"]
+    status_value = str(metadata.get("status", "unknown"))
+    if not allow_non_keep and status_value != "keep":
+        raise RuntimeError(
+            f"Only experiments with status 'keep' can be applied. "
+            f"{exp_id} currently has status '{status_value}'."
+        )
     if preview["conflicts"]:
         raise RuntimeError(
             "Cannot apply experiment because original editable files changed:\n"

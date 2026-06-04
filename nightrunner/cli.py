@@ -40,7 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument(
         "--train-command", type=str, default="python train.py", help="Training command, e.g. uv run train.py"
     )
-    p_init.add_argument("--metric", type=str, default="val_loss", help="Primary metric name.")
+    p_init.add_argument("--metric", type=str, default="val_loss", help="Primary optimization metric name.")
     mode = p_init.add_mutually_exclusive_group()
     mode.add_argument("--lower-is-better", action="store_true", default=True)
     mode.add_argument("--higher-is-better", action="store_true")
@@ -74,7 +74,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Editable file (repeatable), e.g. --editable train.py --editable model.py",
     )
     p_setup.add_argument("--train-command", type=str, default=None, help="Training command.")
-    p_setup.add_argument("--metric", type=str, default=None, help="Primary metric name.")
+    p_setup.add_argument(
+        "--metric",
+        type=str,
+        default=None,
+        help="Primary optimization metric name. If omitted, setup tries to auto-detect it from a sandbox test run.",
+    )
     p_setup.add_argument(
         "--metric-regex",
         type=str,

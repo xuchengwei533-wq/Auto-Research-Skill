@@ -12,9 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import build_default_config, load_config, save_config
-from .doctor import detect_metrics_from_text
 from .experiments import get_experiment_paths, load_diff_text, load_experiment_metadata
-from .log_parser import parse_metrics
+from .log_parser import detect_metric_candidates, parse_metrics
 from .runner import apply_experiment, check_auth, doctor, preview_experiment, run_night
 from .sandbox import SandboxManager
 from .state_store import load_best, load_experiments
@@ -103,7 +102,7 @@ def _run_test_command(project_root: Path, command: str) -> dict[str, Any]:
     log_path = tmp_dir / "test_run.log"
     result = run_training(command=command, cwd=sandbox.project_dir, log_path=log_path, timeout_seconds=300)
     content = read_text(log_path)
-    suggestions = detect_metrics_from_text(content)
+    candidates = detect_metric_candidates(log_path)
     parsed_metrics = parse_metrics(
         log_path,
         config.get("metric", {}).get("name", "metric"),
@@ -113,7 +112,9 @@ def _run_test_command(project_root: Path, command: str) -> dict[str, Any]:
         "returncode": result.get("returncode"),
         "timeout": result.get("timeout"),
         "log_tail": "\n".join(content.splitlines()[-80:]),
-        "metric_suggestions": suggestions,
+        "metric_candidates": candidates,
+        "metric_suggestions": [{"name": item.get("name"), "regex": item.get("regex")} for item in candidates],
+        "selected_metric": candidates[0] if candidates else None,
         "parsed_metric": parsed_metrics,
     }
 
@@ -170,7 +171,7 @@ def _root_html(project_root: Path) -> str:
         <div class="muted" style="margin:6px 0 10px;">Editable file permission only defines where NightRunner may propose changes. Protected keys and protected regions are still enforced inside editable files.</div>
         <label>训练命令</label>
         <textarea id="train_command"></textarea>
-        <label>指标名</label>
+        <label>优化指标</label>
         <input id="metric" />
         <label>指标正则（可选）</label>
         <input id="metric_regex" />
@@ -186,6 +187,7 @@ def _root_html(project_root: Path) -> str:
           <button class="secondary" onclick="testRun()">Test Run</button>
           <button onclick="startRun()">开始运行</button>
         </div>
+        <div id="metric_candidates" class="muted" style="margin-top:10px;">先运行 Test Run，NightRunner 会自动检测优化指标。</div>
         <pre id="setup_result">尚未保存配置</pre>
       </section>
       <section class="card">
@@ -207,7 +209,16 @@ def _root_html(project_root: Path) -> str:
     </div>
   </main>
   <script>
-    const state = {{ selectedExp: null }};
+    const state = {{ selectedExp: null, metricCandidates: [] }};
+    function escapeHtml(value) {{
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({{
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }}[ch]));
+    }}
     async function fetchJson(url, options) {{
       const res = await fetch(url, options);
       if (!res.ok) throw new Error(await res.text());
@@ -258,6 +269,29 @@ def _root_html(project_root: Path) -> str:
       const data = await fetchJson('/api/test-run', {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(payload) }});
       document.getElementById('setup_result').textContent = JSON.stringify(data, null, 2);
       document.getElementById('live_log').textContent = data.log_tail || '暂无日志';
+      state.metricCandidates = data.metric_candidates || [];
+      renderMetricCandidates();
+      if (data.selected_metric) chooseMetric(0);
+    }}
+    function chooseMetric(index) {{
+      const item = state.metricCandidates[index];
+      if (!item) return;
+      document.getElementById('metric').value = item.name || '';
+      document.getElementById('metric_regex').value = item.regex || '';
+      document.getElementById('higher_is_better').value = (!!item.higher_is_better).toString();
+      renderMetricCandidates(index);
+    }}
+    function renderMetricCandidates(selectedIndex = -1) {{
+      const target = document.getElementById('metric_candidates');
+      if (!state.metricCandidates.length) {{
+        target.textContent = '没有检测到指标。可以手动填写优化指标和正则。';
+        return;
+      }}
+      target.innerHTML = '<div>检测到的优化指标：</div>' + state.metricCandidates.map((item, idx) => {{
+        const direction = item.lower_is_better ? 'lower is better' : 'higher is better';
+        const selected = idx === selectedIndex ? ' 当前选择' : '';
+        return `<button class="secondary" onclick="chooseMetric(${{idx}})">${{escapeHtml(item.name)}}=${{escapeHtml(item.value)}} - ${{escapeHtml(direction)}}${{selected}}</button>`;
+      }}).join('');
     }}
     async function startRun() {{
       await saveConfig();
@@ -267,28 +301,31 @@ def _root_html(project_root: Path) -> str:
     }}
     async function loadRunStatus() {{
       const data = await fetchJson('/api/run-status');
-      document.getElementById('run_status').textContent = JSON.stringify({
+      document.getElementById('run_status').textContent = JSON.stringify({{
         running: data.running,
         session: data.session,
         best: data.best
-      }, null, 2);
+      }}, null, 2);
       if (data.latest_log_tail) document.getElementById('live_log').textContent = data.latest_log_tail;
     }}
     async function loadExperiments() {{
       const data = await fetchJson('/api/experiments');
-      const rows = data.items.map(item => `<tr>
-        <td>${{item.id}}</td>
-        <td>${{item.backend || ''}}</td>
-        <td>${{item.status}}</td>
-        <td>${{item.metric_value ?? ''}}</td>
+      const rows = data.items.map(item => {{
+        const canApply = item.status === 'keep';
+        return `<tr>
+        <td>${{escapeHtml(item.id)}}</td>
+        <td>${{escapeHtml(item.backend || '')}}</td>
+        <td>${{escapeHtml(item.status)}}</td>
+        <td>${{escapeHtml(item.metric_value ?? '')}}</td>
         <td>${{item.is_improvement ? 'yes' : 'no'}}</td>
-        <td>${{(item.changed_files || []).join(', ')}}</td>
+        <td>${{escapeHtml((item.changed_files || []).join(', '))}}</td>
         <td>
-          <button onclick=\"viewExperiment('${{item.id}}')\">View Diff</button>
-          <button class=\"secondary\" onclick=\"viewLog('${{item.id}}')\">View Log</button>
-          <button onclick=\"applyExperiment('${{item.id}}')\">Apply</button>
+          <button onclick=\"viewExperiment('${{escapeHtml(item.id)}}')\">View Diff</button>
+          <button class=\"secondary\" onclick=\"viewLog('${{escapeHtml(item.id)}}')\">View Log</button>
+          <button class=\"${{canApply ? '' : 'secondary'}}\" ${{canApply ? '' : 'disabled'}} onclick=\"applyExperiment('${{escapeHtml(item.id)}}')\">Apply</button>
         </td>
-      </tr>`).join('');
+      </tr>`;
+      }}).join('');
       document.getElementById('experiments_table').innerHTML = `<table><thead><tr><th>ID</th><th>Backend</th><th>Status</th><th>Metric</th><th>Improvement</th><th>Changed files</th><th>Actions</th></tr></thead><tbody>${{rows}}</tbody></table>`;
     }}
     async function viewExperiment(expId) {{
@@ -428,7 +465,10 @@ def create_app(project_root: Path) -> FastAPI:
         preview = preview_experiment(project_root, exp_id)
         if preview["conflicts"]:
             return JSONResponse({"ok": False, "conflicts": preview["conflicts"], "diff": preview["diff"]}, status_code=409)
-        patch_path = apply_experiment(project_root, exp_id, confirm=False)
+        try:
+            patch_path = apply_experiment(project_root, exp_id, confirm=False)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"ok": True, "patch_path": str(patch_path)})
 
     return app

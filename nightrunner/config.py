@@ -81,6 +81,16 @@ DEFAULT_PROTECTED_TERMS = [
     "targets",
 ]
 
+
+class _NoAliasSafeDumper(yaml.SafeDumper):
+    def ignore_aliases(self, data: Any) -> bool:
+        return True
+
+
+def _dump_yaml(data: dict[str, Any]) -> str:
+    return yaml.dump(data, Dumper=_NoAliasSafeDumper, sort_keys=False, allow_unicode=True)
+
+
 def build_default_config(
     project_name: str,
     editable_files: list[str] | None = None,
@@ -88,12 +98,12 @@ def build_default_config(
     metric_name: str = "val_loss",
     lower_is_better: bool = True,
 ) -> dict[str, Any]:
-    editable = editable_files or ["train.py"]
+    editable = list(editable_files or ["train.py"])
     return {
         "project": {"name": project_name},
-        "editable_files": editable,
+        "editable_files": list(editable),
         "files": {
-            "editable": editable,
+            "editable": list(editable),
             "protected": [
                 ".env",
                 ".env.local",
@@ -178,7 +188,7 @@ def write_default_config_if_missing(
         metric_name=metric_name,
         lower_is_better=lower_is_better,
     )
-    write_text(path, yaml.safe_dump(default, sort_keys=False, allow_unicode=True))
+    write_text(path, _dump_yaml(default))
     return path
 
 
@@ -206,7 +216,7 @@ def load_config(project_root: Path) -> dict[str, Any]:
 def save_config(project_root: Path, config: dict[str, Any]) -> Path:
     """Persist config to nightrunner.yaml."""
     path = get_config_path(project_root)
-    write_text(path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+    write_text(path, _dump_yaml(config))
     return path
 
 
