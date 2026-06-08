@@ -241,6 +241,42 @@ def _load_baseline_record(project_root: Path) -> dict[str, Any] | None:
     return None
 
 
+def _metric_identity(config: dict[str, Any]) -> dict[str, Any]:
+    metric = config.get("metric", {}) if isinstance(config.get("metric"), dict) else {}
+    return {
+        "name": str(metric.get("name", "val_loss")),
+        "regex": metric.get("regex"),
+        "lower_is_better": bool(metric.get("lower_is_better", True)),
+    }
+
+
+def _baseline_metric_warning(config: dict[str, Any], baseline: dict[str, Any] | None) -> str | None:
+    if not baseline or baseline.get("status") != "baseline":
+        return None
+    current = _metric_identity(config)
+    baseline_metric = baseline.get("metric_config")
+    if isinstance(baseline_metric, dict):
+        baseline_identity = {
+            "name": str(baseline_metric.get("name", "")),
+            "regex": baseline_metric.get("regex"),
+            "lower_is_better": bool(baseline_metric.get("lower_is_better", True)),
+        }
+    else:
+        baseline_identity = {
+            "name": str(baseline.get("metric_name") or (baseline.get("metrics", {}) or {}).get("metric_name") or ""),
+            "regex": (baseline.get("metrics", {}) or {}).get("metric_regex"),
+            "lower_is_better": current["lower_is_better"],
+        }
+    current_regex = current.get("regex") or None
+    baseline_regex = baseline_identity.get("regex") or None
+    if baseline_identity.get("name") != current["name"] or baseline_regex != current_regex or baseline_identity.get("lower_is_better") != current["lower_is_better"]:
+        return (
+            "Baseline was created with a different metric configuration. "
+            "Run `nightrunner baseline --force` before comparing new experiments."
+        )
+    return None
+
+
 def _create_workspace(project_root: Path, config: dict[str, Any], exp_id: str) -> dict[str, Any]:
     backend = _backend(config)
     if backend == "worktree":
@@ -343,6 +379,7 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
         "status": "running",
         "stage": "运行基线",
         "metric_name": config.get("metric", {}).get("name", "metric"),
+        "metric_config": _metric_identity(config),
         "metric_value": None,
         "baseline_metric": None,
         "is_improvement": False,
@@ -403,6 +440,8 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
                         "experiment_id": "baseline",
                         "metric_name": metrics.get("metric_name"),
                         "metric_value": metrics.get("metric_value"),
+                        "metric_regex": metrics.get("metric_regex"),
+                        "lower_is_better": bool(config.get("metric", {}).get("lower_is_better", True)),
                         "patch_path": None,
                         "updated_at": now_iso(),
                         "is_baseline": True,
@@ -424,6 +463,85 @@ def run_baseline(project_root: Path, force: bool = False) -> Path:
     return paths.report_path
 
 
+def _run_dry_run_preflight(project_root: Path, config: dict[str, Any], rounds: int, plain: bool, ui: RunUI | None = None) -> Path:
+    """Validate local setup without calling the model API or running training."""
+    ui = ui or RunUI(enabled=not plain)
+    _print_config_summary(project_root, config, "NightRunner dry-run preflight", emit=ui.log)
+    baseline = _load_baseline_record(project_root)
+    warning = _baseline_metric_warning(config, baseline)
+    if warning:
+        ui.log(f"Warning: {warning}")
+    ui.start_run(project_root, config, rounds, baseline_info="preflight only")
+    _save_session_state(
+        project_root,
+        {
+            "running": True,
+            "current_round": 0,
+            "total_rounds": rounds,
+            "stage": "预检查",
+            "dry_run": True,
+            "updated_at": now_iso(),
+        },
+    )
+    workspace: dict[str, Any] | None = None
+    checks: list[str] = []
+    t_total = perf_counter()
+    try:
+        editable = list(config.get("files", {}).get("editable", []))
+        workspace = _create_workspace(project_root, config, "dry_run_preflight")
+        checks.append("workspace")
+        file_contents = _collect_editable_contents(Path(workspace["project_dir"]), editable)
+        missing = [path for path in editable if path not in file_contents]
+        if missing:
+            raise RuntimeError("Editable files not found in preflight sandbox:\n" + "\n".join(f"- {path}" for path in missing))
+        checks.append("editable_files")
+        build_system_prompt()
+        build_user_prompt(config, load_best(project_root), load_experiments(project_root)[-5:], file_contents)
+        checks.append("prompt")
+        ui.log("Dry-run preflight completed. No model API call, patch apply, or training was run.")
+        summary = generate_summary_report(project_root)
+        _save_session_state(
+            project_root,
+            {
+                "running": False,
+                "current_round": 0,
+                "total_rounds": rounds,
+                "stage": "预检查完成",
+                "dry_run": True,
+                "checks": checks,
+                "elapsed_seconds": perf_counter() - t_total,
+                "best": load_best(project_root),
+                "warning": warning,
+                "updated_at": now_iso(),
+            },
+        )
+        ui.finish_run(summary)
+        return summary
+    except Exception as exc:
+        _save_session_state(
+            project_root,
+            {
+                "running": False,
+                "current_round": 0,
+                "total_rounds": rounds,
+                "stage": "预检查失败",
+                "dry_run": True,
+                "checks": checks,
+                "error": str(exc),
+                "elapsed_seconds": perf_counter() - t_total,
+                "updated_at": now_iso(),
+            },
+        )
+        raise
+    finally:
+        if workspace and workspace.get("backend") == "sandbox":
+            sandbox_dir = workspace.get("sandbox_dir")
+            if isinstance(sandbox_dir, Path) and sandbox_dir.exists():
+                shutil.rmtree(sandbox_dir)
+        elif workspace:
+            _cleanup_workspace(project_root, workspace, keep=False)
+
+
 def run_night(
     project_root: Path,
     rounds: int,
@@ -438,7 +556,13 @@ def run_night(
     config = load_config(project_root)
     _ensure_config_only_mode(config)
     _ensure_backend_ready(project_root, config, emit=(ui.log if ui else print))
-    if not dry_run and not _baseline_exists(project_root):
+    if dry_run:
+        return _run_dry_run_preflight(project_root, config, rounds, plain=plain, ui=ui)
+    auth = check_auth(project_root)
+    if not auth["ok"]:
+        env_name = str(config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"))
+        raise RuntimeError(f"No API key found.\nRun `nightrunner auth login`\nor set {env_name} in your environment.")
+    if not _baseline_exists(project_root):
         run_baseline(project_root)
 
     ui = ui or RunUI(enabled=not plain)
@@ -459,6 +583,7 @@ def run_night(
             "status": "running",
             "stage": "创建隔离环境",
             "metric_name": metric_cfg.get("name", "metric"),
+            "metric_config": _metric_identity(config),
             "metric_value": None,
             "baseline_metric": baseline.get("metric_value"),
             "is_improvement": False,
@@ -663,6 +788,8 @@ def run_night(
                                     "experiment_id": exp_id,
                                     "metric_name": metrics.get("metric_name"),
                                     "metric_value": metrics.get("metric_value"),
+                                    "metric_regex": metrics.get("metric_regex"),
+                                    "lower_is_better": bool(metric_cfg.get("lower_is_better", True)),
                                     "patch_path": f".nightrunner/experiments/{exp_id}/patch.diff",
                                     "updated_at": now_iso(),
                                 },
@@ -707,10 +834,11 @@ def run(project_root: Path, rounds: int = 1, dry_run: bool = False, plain: bool 
         raise RuntimeError("No nightrunner.yaml found.\nRun `nightrunner setup` first.") from exc
     _ensure_config_only_mode(config)
     _ensure_backend_ready(project_root, config)
-    auth = check_auth(project_root)
-    if not auth["ok"]:
-        env_name = str(config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"))
-        raise RuntimeError(f"No API key found.\nRun `nightrunner auth login`\nor set {env_name} in your environment.")
+    if not dry_run:
+        auth = check_auth(project_root)
+        if not auth["ok"]:
+            env_name = str(config.get("agent", {}).get("api_key_env", "DEEPSEEK_API_KEY"))
+            raise RuntimeError(f"No API key found.\nRun `nightrunner auth login`\nor set {env_name} in your environment.")
     if not dry_run and not _baseline_exists(project_root):
         run_baseline(project_root)
     return run_night(project_root, rounds=rounds, dry_run=dry_run, plain=plain)
@@ -775,9 +903,11 @@ def status(project_root: Path, plain: bool = False) -> None:
     """Show current NightRunner status without starting new experiments."""
     ui = RunUI(enabled=not plain)
     info = collect_doctor_info(project_root)
+    config = load_config(project_root)
     experiments = load_experiments(project_root)
     best = load_best(project_root) or {}
     baseline = _load_baseline_record(project_root) or {}
+    baseline_warning = _baseline_metric_warning(config, baseline)
     latest = experiments[-1] if experiments else {}
     session = _load_session_state(project_root)
     ui.log(f"Project root: {project_root}")
@@ -787,6 +917,8 @@ def status(project_root: Path, plain: bool = False) -> None:
     ui.log(f"Running: {session.get('running')}")
     ui.log(f"Current stage: {session.get('stage')}")
     ui.log(f"Baseline: {baseline.get('metric_value')}")
+    if baseline_warning:
+        ui.log(f"Baseline warning: {baseline_warning}")
     ui.log(f"Current best: {best.get('experiment_id')} ({best.get('metric_value')})")
     ui.log(f"Latest experiment: {latest.get('id')}")
     ui.log(f"Latest status: {latest.get('status')}")
@@ -852,11 +984,20 @@ def preview_experiment(project_root: Path, exp_id: str) -> dict[str, Any]:
     base_hashes = metadata.get("base_file_hashes", {}) if isinstance(metadata.get("base_file_hashes"), dict) else {}
     current_hashes = collect_file_hashes(project_root, editable_files)
     conflicts = [path for path in editable_files if current_hashes.get(path) != base_hashes.get(path)]
+    status_value = str(metadata.get("status", "unknown"))
+    apply_block_reason = ""
+    if status_value != "keep":
+        apply_block_reason = f"Only experiments with status 'keep' can be applied. {exp_id} currently has status '{status_value}'."
+    elif conflicts:
+        apply_block_reason = "Original editable files changed since this experiment was created."
+    can_apply = status_value == "keep" and not conflicts
     return {
         "metadata": metadata,
         "diff": load_diff_text(project_root, exp_id),
         "conflicts": conflicts,
-        "safe_to_apply": len(conflicts) == 0,
+        "safe_to_apply": can_apply,
+        "can_apply": can_apply,
+        "apply_block_reason": apply_block_reason,
     }
 
 

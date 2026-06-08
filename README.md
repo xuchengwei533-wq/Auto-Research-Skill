@@ -15,8 +15,9 @@ nightrunner ui
 Recommended first steps:
 
 - run `nightrunner doctor` if you want a quick environment check
+- run `nightrunner setup --yes` if you prefer the CLI; it probes your training log and auto-detects the optimization metric when possible
 - run `nightrunner ui` as the default entrypoint for new users
-- choose editable files, train command, metric, direction, and rounds in the UI
+- in the UI, set editable files and the train command, then use Test Run to auto-detect metric candidates before starting experiments
 
 NightRunner runs experiments in isolated sandboxes.
 Your main project files are not modified unless you explicitly apply an experiment.
@@ -49,11 +50,11 @@ If `nightrunner` is not found on Windows after a `uv` install, run `uv tool upda
 ## CLI Usage
 
 ```powershell
-nightrunner init --editable main.py --train-command "python main.py" --metric val_loss --lower-is-better
 nightrunner setup --project D:\MyDeepLearningProject --yes
 nightrunner doctor
 nightrunner ui
 nightrunner baseline
+nightrunner night --dry-run
 nightrunner night --rounds 8
 nightrunner report
 
@@ -192,6 +193,10 @@ Key sections:
 - `logging`: request/response/run artifact persistence options.
 
 ## Metric Parsing
+
+`nightrunner setup --yes` and the Web UI Test Run can auto-detect common metrics such as `val_loss`, `loss`, `accuracy`, `f1`, `auc`, and related validation/evaluation names from the latest matching value in the training log. If auto-detection picks the wrong candidate, you can still override the metric name, direction, or regex in `nightrunner.yaml` or in the UI.
+
+If you change the metric after a baseline already exists, run `nightrunner baseline --force` so later experiments are compared against the same metric configuration.
 
 Default parsing:
 

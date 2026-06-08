@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from .config import build_default_config, load_config, save_config
 from .experiments import get_experiment_paths, load_diff_text, load_experiment_metadata
 from .log_parser import detect_metric_candidates, parse_metrics
-from .runner import apply_experiment, check_auth, doctor, preview_experiment, run_night
+from .runner import _baseline_metric_warning, apply_experiment, check_auth, doctor, preview_experiment, run_night
 from .sandbox import SandboxManager
 from .state_store import load_best, load_experiments
 from .train_runner import run_training
@@ -119,6 +119,34 @@ def _run_test_command(project_root: Path, command: str) -> dict[str, Any]:
     }
 
 
+def _current_baseline_warning(project_root: Path) -> str | None:
+    try:
+        config = load_config(project_root)
+    except FileNotFoundError:
+        return None
+    baseline = next((item for item in reversed(load_experiments(project_root)) if item.get("id") == "baseline"), None)
+    return _baseline_metric_warning(config, baseline)
+
+
+def _decorate_experiment_item(project_root: Path, item: dict[str, Any]) -> dict[str, Any]:
+    exp_id = item.get("id")
+    decorated = dict(item)
+    if not isinstance(exp_id, str):
+        decorated["can_apply"] = False
+        decorated["apply_block_reason"] = "Experiment ID is missing."
+        return decorated
+    try:
+        preview = preview_experiment(project_root, exp_id)
+        decorated["can_apply"] = bool(preview.get("can_apply"))
+        decorated["apply_block_reason"] = preview.get("apply_block_reason", "")
+        decorated["conflicts"] = preview.get("conflicts", [])
+    except Exception as exc:
+        decorated["can_apply"] = False
+        decorated["apply_block_reason"] = str(exc)
+        decorated["conflicts"] = []
+    return decorated
+
+
 def _root_html(project_root: Path) -> str:
     return f"""
 <!doctype html>
@@ -137,16 +165,20 @@ def _root_html(project_root: Path) -> str:
     textarea {{ min-height:90px; }}
     button {{ border:0; border-radius:8px; padding:10px 14px; background:#2563eb; color:white; cursor:pointer; margin-right:8px; }}
     button.secondary {{ background:#475569; }}
+    button:disabled {{ opacity:.55; cursor:not-allowed; }}
     pre {{ white-space:pre-wrap; word-break:break-word; background:#020617; padding:12px; border-radius:8px; border:1px solid #334155; max-height:320px; overflow:auto; }}
     table {{ width:100%; border-collapse:collapse; }}
     td,th {{ border-bottom:1px solid #334155; padding:8px; text-align:left; vertical-align:top; }}
     .muted {{ color:#94a3b8; }}
+    .notice {{ margin:0 0 16px; padding:10px 12px; border-radius:8px; border:1px solid #2563eb; background:#172554; color:#dbeafe; }}
+    .notice.error {{ border-color:#dc2626; background:#450a0a; color:#fee2e2; }}
   </style>
 </head>
 <body>
   <main>
     <h1>NightRunner 本地实验 UI</h1>
     <p class="muted">NightRunner 在隔离 sandbox 中运行实验。除非你显式点击 Apply，否则不会改动主项目文件。Git commit 是可选项，不是运行前置条件。</p>
+    <div id="global_notice" class="notice" hidden></div>
     <div class="grid">
       <section class="card">
         <h2>1. Project Doctor</h2>
@@ -183,9 +215,9 @@ def _root_html(project_root: Path) -> str:
         <label>实验轮数</label>
         <input id="rounds" type="number" value="3" />
         <div style="margin-top:12px;">
-          <button onclick="saveConfig()">保存配置</button>
-          <button class="secondary" onclick="testRun()">Test Run</button>
-          <button onclick="startRun()">开始运行</button>
+          <button onclick="handleAction('保存配置', saveConfig)">保存配置</button>
+          <button class="secondary" onclick="handleAction('Test Run', testRun)">Test Run</button>
+          <button onclick="handleAction('开始运行', startRun)">开始运行</button>
         </div>
         <div id="metric_candidates" class="muted" style="margin-top:10px;">先运行 Test Run，NightRunner 会自动检测优化指标。</div>
         <pre id="setup_result">尚未保存配置</pre>
@@ -204,12 +236,12 @@ def _root_html(project_root: Path) -> str:
         <div id="selected_exp" class="muted">点击上方实验的查看按钮。</div>
         <pre id="diff_view">暂无 diff</pre>
         <pre id="log_view">暂无日志</pre>
-        <button onclick="applySelected()">Apply this experiment</button>
+        <button id="apply_selected_btn" class="secondary" disabled onclick="handleAction('Apply', applySelected)">Apply this experiment</button>
       </section>
     </div>
   </main>
   <script>
-    const state = {{ selectedExp: null, metricCandidates: [] }};
+    const state = {{ selectedExp: null, selectedCanApply: false, selectedApplyReason: '', metricCandidates: [] }};
     function escapeHtml(value) {{
       return String(value ?? '').replace(/[&<>"']/g, ch => ({{
         '&': '&amp;',
@@ -219,10 +251,52 @@ def _root_html(project_root: Path) -> str:
         "'": '&#39;'
       }}[ch]));
     }}
+    function setNotice(message, type = 'info') {{
+      const el = document.getElementById('global_notice');
+      if (!message) {{
+        el.hidden = true;
+        el.textContent = '';
+        el.className = 'notice';
+        return;
+      }}
+      el.hidden = false;
+      el.textContent = message;
+      el.className = type === 'error' ? 'notice error' : 'notice';
+    }}
+    function clearNotice() {{
+      setNotice('');
+    }}
+    function formatError(error) {{
+      return error && error.message ? error.message : String(error);
+    }}
+    async function handleAction(label, action) {{
+      clearNotice();
+      try {{
+        return await action();
+      }} catch (error) {{
+        setNotice(`${{label}} 失败：${{formatError(error)}}`, 'error');
+        return null;
+      }}
+    }}
     async function fetchJson(url, options) {{
       const res = await fetch(url, options);
-      if (!res.ok) throw new Error(await res.text());
-      return await res.json();
+      const text = await res.text();
+      if (!res.ok) {{
+        let message = text || `${{res.status}} ${{res.statusText}}`;
+        try {{
+          const data = JSON.parse(text);
+          message = data.detail || data.message || message;
+          if (typeof message !== 'string') message = JSON.stringify(message);
+        }} catch (error) {{}}
+        throw new Error(message);
+      }}
+      return text ? JSON.parse(text) : {{}};
+    }}
+    function updateApplyButton() {{
+      const button = document.getElementById('apply_selected_btn');
+      button.disabled = !state.selectedExp || !state.selectedCanApply;
+      button.className = button.disabled ? 'secondary' : '';
+      button.title = state.selectedApplyReason || '';
     }}
     async function loadDoctor() {{
       const data = await fetchJson('/api/doctor');
@@ -301,17 +375,20 @@ def _root_html(project_root: Path) -> str:
     }}
     async function loadRunStatus() {{
       const data = await fetchJson('/api/run-status');
-      document.getElementById('run_status').textContent = JSON.stringify({{
+      const status = {{
         running: data.running,
         session: data.session,
         best: data.best
-      }}, null, 2);
+      }};
+      if (data.baseline_warning) status.baseline_warning = data.baseline_warning;
+      document.getElementById('run_status').textContent = JSON.stringify(status, null, 2);
       if (data.latest_log_tail) document.getElementById('live_log').textContent = data.latest_log_tail;
     }}
     async function loadExperiments() {{
       const data = await fetchJson('/api/experiments');
       const rows = data.items.map(item => {{
-        const canApply = item.status === 'keep';
+        const canApply = !!item.can_apply;
+        const applyTitle = item.apply_block_reason ? ` title="${{escapeHtml(item.apply_block_reason)}}"` : '';
         return `<tr>
         <td>${{escapeHtml(item.id)}}</td>
         <td>${{escapeHtml(item.backend || '')}}</td>
@@ -320,9 +397,9 @@ def _root_html(project_root: Path) -> str:
         <td>${{item.is_improvement ? 'yes' : 'no'}}</td>
         <td>${{escapeHtml((item.changed_files || []).join(', '))}}</td>
         <td>
-          <button onclick=\"viewExperiment('${{escapeHtml(item.id)}}')\">View Diff</button>
-          <button class=\"secondary\" onclick=\"viewLog('${{escapeHtml(item.id)}}')\">View Log</button>
-          <button class=\"${{canApply ? '' : 'secondary'}}\" ${{canApply ? '' : 'disabled'}} onclick=\"applyExperiment('${{escapeHtml(item.id)}}')\">Apply</button>
+          <button onclick=\"handleAction('View Diff', () => viewExperiment('${{escapeHtml(item.id)}}'))\">View Diff</button>
+          <button class=\"secondary\" onclick=\"handleAction('View Log', () => viewLog('${{escapeHtml(item.id)}}'))\">View Log</button>
+          <button class=\"${{canApply ? '' : 'secondary'}}\"${{applyTitle}} ${{canApply ? '' : 'disabled'}} onclick=\"handleAction('Apply', () => applyExperiment('${{escapeHtml(item.id)}}'))\">Apply</button>
         </td>
       </tr>`;
       }}).join('');
@@ -332,35 +409,59 @@ def _root_html(project_root: Path) -> str:
       state.selectedExp = expId;
       const meta = await fetchJson(`/api/experiments/${{expId}}`);
       const diff = await fetchJson(`/api/experiments/${{expId}}/diff`);
-      document.getElementById('selected_exp').textContent = JSON.stringify(meta.metadata, null, 2);
+      state.selectedCanApply = !!diff.can_apply;
+      state.selectedApplyReason = diff.apply_block_reason || '';
+      updateApplyButton();
+      const applyState = state.selectedCanApply ? 'Apply: ready' : `Apply blocked: ${{state.selectedApplyReason || 'not available'}}`;
+      document.getElementById('selected_exp').textContent = JSON.stringify(meta.metadata, null, 2) + '\\n\\n' + applyState;
       document.getElementById('diff_view').textContent = diff.diff || '(no diff)';
       document.getElementById('log_view').textContent = meta.log_tail || '暂无日志';
       document.getElementById('live_log').textContent = meta.log_tail || '暂无日志';
     }}
     async function viewLog(expId) {{
       state.selectedExp = expId;
+      state.selectedCanApply = false;
+      state.selectedApplyReason = '请先点击 View Diff 确认该实验可应用。';
+      updateApplyButton();
       const meta = await fetchJson(`/api/experiments/${{expId}}`);
       document.getElementById('selected_exp').textContent = JSON.stringify(meta.metadata, null, 2);
       document.getElementById('log_view').textContent = meta.log_tail || '暂无日志';
       document.getElementById('live_log').textContent = meta.log_tail || '暂无日志';
     }}
     async function applyExperiment(expId) {{
+      const needsPreview = state.selectedExp !== expId || !state.selectedCanApply;
       state.selectedExp = expId;
+      if (needsPreview) {{
+        const diff = await fetchJson(`/api/experiments/${{expId}}/diff`);
+        state.selectedCanApply = !!diff.can_apply;
+        state.selectedApplyReason = diff.apply_block_reason || '';
+        updateApplyButton();
+      }}
+      if (!state.selectedCanApply) throw new Error(state.selectedApplyReason || '该实验当前不能 Apply。');
       if (!confirm('确认将该实验写回主项目吗？')) return;
       const data = await fetchJson(`/api/experiments/${{expId}}/apply`, {{ method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{ confirm: true }}) }});
-      alert(JSON.stringify(data, null, 2));
+      setNotice(`Apply 完成：${{data.patch_path || expId}}`);
       await loadDoctor();
       await loadExperiments();
     }}
     async function applySelected() {{
-      if (!state.selectedExp) return;
+      if (!state.selectedExp) throw new Error('请先选择一个实验。');
+      if (!state.selectedCanApply) throw new Error(state.selectedApplyReason || '该实验当前不能 Apply。');
       await applyExperiment(state.selectedExp);
     }}
     async function tick() {{
       await loadRunStatus();
       await loadExperiments();
     }}
-    loadDoctor(); loadConfig(); tick(); setInterval(tick, 2000);
+    async function refreshQuietly() {{
+      try {{
+        await tick();
+      }} catch (error) {{
+        setNotice(`刷新状态失败：${{formatError(error)}}`, 'error');
+      }}
+    }}
+    handleAction('初始化', async () => {{ await loadDoctor(); await loadConfig(); await tick(); }});
+    setInterval(refreshQuietly, 2000);
   </script>
 </body>
 </html>
@@ -421,12 +522,13 @@ def create_app(project_root: Path) -> FastAPI:
                 "running": coordinator.is_running(),
                 "latest_log_tail": latest_log_tail,
                 "doctor": doctor(project_root),
+                "baseline_warning": _current_baseline_warning(project_root),
             }
         )
 
     @app.get("/api/experiments")
     async def api_experiments() -> JSONResponse:
-        items = list(reversed(load_experiments(project_root)))
+        items = [_decorate_experiment_item(project_root, item) for item in reversed(load_experiments(project_root))]
         return JSONResponse({"items": items})
 
     @app.get("/api/experiments/{exp_id}")
@@ -455,6 +557,8 @@ def create_app(project_root: Path) -> FastAPI:
                 "diff": preview["diff"],
                 "conflicts": preview["conflicts"],
                 "safe_to_apply": preview["safe_to_apply"],
+                "can_apply": preview["can_apply"],
+                "apply_block_reason": preview["apply_block_reason"],
             }
         )
 
@@ -463,8 +567,18 @@ def create_app(project_root: Path) -> FastAPI:
         if not bool(payload.get("confirm")):
             raise HTTPException(status_code=400, detail="需要确认后才能 apply。")
         preview = preview_experiment(project_root, exp_id)
-        if preview["conflicts"]:
-            return JSONResponse({"ok": False, "conflicts": preview["conflicts"], "diff": preview["diff"]}, status_code=409)
+        if not preview["can_apply"]:
+            if preview["conflicts"]:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "conflicts": preview["conflicts"],
+                        "diff": preview["diff"],
+                        "detail": preview["apply_block_reason"],
+                    },
+                    status_code=409,
+                )
+            raise HTTPException(status_code=400, detail=preview["apply_block_reason"])
         try:
             patch_path = apply_experiment(project_root, exp_id, confirm=False)
         except RuntimeError as exc:

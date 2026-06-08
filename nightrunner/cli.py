@@ -51,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_night.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate changes only and skip training.",
+        help="Run local preflight only; do not call the model API, patch files, or train.",
     )
     p_night.add_argument("--plain", action="store_true", help="Force plain text output (disable rich UI).")
 
@@ -61,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate changes only and skip training.",
+        help="Run local preflight only; do not call the model API, patch files, or train.",
     )
     p_run.add_argument("--plain", action="store_true", help="Force plain text output (disable rich UI).")
 
